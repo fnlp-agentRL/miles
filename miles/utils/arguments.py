@@ -207,7 +207,7 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 nargs="*",
                 default=(),
-                help=("Extra substrings for HF weight names to skip quantization " "(e.g. .kv_b_proj.)."),
+                help=("Extra substrings for HF weight names to skip quantization (e.g. .kv_b_proj.)."),
             )
             parser.add_argument(
                 "--extra-high-precision-layers-megatron",
@@ -666,6 +666,7 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument("--input-key", type=str, default="input", help="JSON dataset key")
             parser.add_argument("--label-key", type=str, default=None, help="JSON dataset key")
+            parser.add_argument("--system-prompt-path", type=str, default=None, help="Path to the system prompt file.")
             parser.add_argument(
                 "--multimodal-keys",
                 type=json.loads,
@@ -2034,9 +2035,9 @@ def miles_validate_args(args):
         assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
 
     if args.get_mismatch_metrics:
-        assert (
-            args.custom_tis_function_path is not None
-        ), "custom_tis_function_path must be set when get_mismatch_metrics is set"
+        assert args.custom_tis_function_path is not None, (
+            "custom_tis_function_path must be set when get_mismatch_metrics is set"
+        )
 
         if args.use_rollout_logprobs:
             logger.info(
@@ -2093,7 +2094,7 @@ def miles_validate_args(args):
             args.train_memory_margin_bytes = 0
 
     assert not (args.debug_rollout_only and args.debug_train_only), (
-        "debug_rollout_only and debug_train_only cannot be set at the same time, " "please set only one of them."
+        "debug_rollout_only and debug_train_only cannot be set at the same time, please set only one of them."
     )
 
     # always true on offload for colocate at the moment.
@@ -2102,9 +2103,9 @@ def miles_validate_args(args):
             "P2P weight transfer mode is not compatible with --colocate. "
             "Please use broadcast mode or disable colocate."
         )
-        assert (
-            getattr(args, "prefill_num_servers", None) is None
-        ), "P2P weight transfer mode has not been tested when PD is enabled."
+        assert getattr(args, "prefill_num_servers", None) is None, (
+            "P2P weight transfer mode has not been tested when PD is enabled."
+        )
 
     if args.colocate:
         if args.offload_train is None:
@@ -2173,7 +2174,7 @@ def miles_validate_args(args):
     else:
         # if num_epoch is not set, we should set num_rollout
         assert args.num_rollout is not None, (
-            "num_epoch is not set, but num_rollout is not set, " "please set --num-rollout or --num-epoch"
+            "num_epoch is not set, but num_rollout is not set, please set --num-rollout or --num-epoch"
         )
 
     if args.enable_mtp_training:
@@ -2202,17 +2203,17 @@ def miles_validate_args(args):
             logger.info(
                 f"args.rollout_max_prompt_len is not set. Use args.rollout_max_context_len - 1 ({args.rollout_max_context_len} - 1) as default value so that there is at least one generated token to compute loss."
             )
-        assert (
-            args.rollout_max_prompt_len <= args.rollout_max_context_len - 1
-        ), f"args.rollout_max_prompt_len ({args.rollout_max_prompt_len}) must be smaller than args.rollout_max_context_len ({args.rollout_max_context_len}) so that there is at least one generated token to compute loss."
+        assert args.rollout_max_prompt_len <= args.rollout_max_context_len - 1, (
+            f"args.rollout_max_prompt_len ({args.rollout_max_prompt_len}) must be smaller than args.rollout_max_context_len ({args.rollout_max_context_len}) so that there is at least one generated token to compute loss."
+        )
 
-    assert not (
-        args.prefill_num_servers is not None and args.rollout_external
-    ), "prefill_num_servers cannot be set when rollout_external is set."
+    assert not (args.prefill_num_servers is not None and args.rollout_external), (
+        "prefill_num_servers cannot be set when rollout_external is set."
+    )
 
-    assert not (
-        getattr(args, "sglang_config", None) is not None and args.rollout_external
-    ), "sglang_config cannot be set when rollout_external is set."
+    assert not (getattr(args, "sglang_config", None) is not None and args.rollout_external), (
+        "sglang_config cannot be set when rollout_external is set."
+    )
 
     assert not (
         getattr(args, "sglang_config", None) is not None and getattr(args, "prefill_num_servers", None) is not None
@@ -2220,9 +2221,9 @@ def miles_validate_args(args):
 
     if args.qkv_format == "bshd":
         assert args.train_backend == "megatron", "bshd format is only supported for megatron backend."
-        assert (
-            args.use_dynamic_batch_size is False
-        ), "Dynamic batch size is not supported for bshd format. Please specify --micro-batch-size instead."
+        assert args.use_dynamic_batch_size is False, (
+            "Dynamic batch size is not supported for bshd format. Please specify --micro-batch-size instead."
+        )
 
     _maybe_apply_dumper_overrides(args)
 

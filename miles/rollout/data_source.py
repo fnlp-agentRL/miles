@@ -1,5 +1,7 @@
 import abc
 import copy
+import hashlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -12,6 +14,25 @@ from miles.utils.processing_utils import load_processor, load_tokenizer
 from miles.utils.types import Sample
 
 logger = logging.getLogger(__name__)
+
+
+def apply_system_prompt(
+    sample: Sample,
+    system_prompt: list[dict] | None,
+    seed: int,
+    tokenizer,
+) -> Sample:
+    chat_template_fn = sample.metadata.pop("_apply_chat_template_fn", None)
+    if chat_template_fn is None or system_prompt is None or sample.prompt == "":
+        return sample
+    digest = hashlib.sha256(f"{seed}_{sample.group_index}".encode()).hexdigest()
+    chosen = system_prompt[int(digest, 16) % len(system_prompt)]
+    sample.metadata["_messages_dict"] = [{"role": "system", "content": chosen["content"]}] + sample.metadata[
+        "_messages_dict"
+    ]
+    sample.metadata["system_prompt_metadata"] = chosen["metadata"]
+    sample.prompt = chat_template_fn(sample.metadata["_messages_dict"], tokenizer=tokenizer)
+    return sample
 
 
 class DataSource(abc.ABC):
@@ -49,9 +70,11 @@ class RolloutDataSource(DataSource):
         self.sample_group_index = 0
         self.sample_index = 0
         self.sample_offset = 0
+        self.seed = args.rollout_seed
         # TODO remove this
         self.metadata = {}
-
+        self.system_prompt = None
+        self.tokenizer = None
         if args.rollout_global_dataset:
             tokenizer = load_tokenizer(
                 args.hf_checkpoint, chat_template_path=args.chat_template_path, trust_remote_code=True
@@ -80,8 +103,14 @@ class RolloutDataSource(DataSource):
             )
             if self.args.rollout_shuffle:
                 self.dataset.shuffle(self.epoch_id)
+
+            self.tokenizer = tokenizer
         else:
             self.dataset = None
+
+        if self.args.system_prompt_path is not None:
+            with open(self.args.system_prompt_path, encoding="utf-8") as f:
+                self.system_prompt = json.load(f)
 
     def get_samples(self, num_samples):
         # TODO further improve code
@@ -107,6 +136,7 @@ class RolloutDataSource(DataSource):
                 sample = copy.deepcopy(prompt_sample)
                 sample.group_index = self.sample_group_index
                 sample.index = self.sample_index
+                sample = apply_system_prompt(sample, self.system_prompt, self.seed, self.tokenizer)
                 self.sample_index += 1
                 group.append(sample)
             self.sample_group_index += 1
@@ -195,9 +225,9 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
         assert isinstance(samples, list), f"samples must be a list, got {type(samples)}"
         assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
         for i in range(0, len(samples)):
-            assert (
-                len(samples[i]) == self.args.n_samples_per_prompt
-            ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
+            assert len(samples[i]) == self.args.n_samples_per_prompt, (
+                f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
+            )
             group = samples[i]  # type: ignore
             self.buffer.append(group)
 

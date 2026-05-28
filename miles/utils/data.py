@@ -1,3 +1,4 @@
+from functools import partial
 import itertools
 import json
 import logging
@@ -62,7 +63,6 @@ def read_file(path):
         raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
 
     if row_slice is not None:
-
         logger.info("read_file path=%s applying slice row_slice=%s", path, row_slice)
         reader = itertools.islice(reader, row_slice.start, row_slice.stop, row_slice.step)
 
@@ -212,12 +212,21 @@ class Dataset:
             else:
                 output_prompt = prompt
 
+            metadata["_messages_dict"] = prompt
+            metadata["_apply_chat_template_fn"] = partial(
+                chat_template_utils.apply_chat_template,
+                tools=tools,
+                tokenize=False,
+                add_generation_prompt=True,
+                **(apply_chat_template_kwargs or {}),
+            )
+
             if processor:
                 from miles.utils.processing_utils import process_vision_info
 
-                assert isinstance(
-                    prompt, list
-                ), f"prompt must be a list when processor is not None, got {type(prompt)} instead"
+                assert isinstance(prompt, list), (
+                    f"prompt must be a list when processor is not None, got {type(prompt)} instead"
+                )
                 multimodal_inputs = process_vision_info(prompt, processor)
             else:
                 multimodal_inputs = None
