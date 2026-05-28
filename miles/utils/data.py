@@ -125,7 +125,7 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
 
     logger.info(f"Filtered {len(origin_samples) - len(filtered_samples)} samples longer than max_length={max_length}.")
 
-    return filtered_samples``
+    return filtered_samples
 
 
 def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimodal_keys: dict = None):
