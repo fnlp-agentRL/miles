@@ -698,9 +698,9 @@ class RolloutManager:
             if sample.loss_mask is None:
                 sample.loss_mask = [1] * sample.response_length
 
-            assert (
-                len(sample.loss_mask) == sample.response_length
-            ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
+            assert len(sample.loss_mask) == sample.response_length, (
+                f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
+            )
             if sample.remove_sample:
                 sample.loss_mask = [0] * sample.response_length
             loss_masks.append(sample.loss_mask)
@@ -1272,7 +1272,7 @@ def compute_perf_metrics_from_samples(args, samples, rollout_time):
 
 def _compute_zero_std_metrics(args, all_samples: list[Sample]):
     # only compute in GRPO-like algorithms where one prompt has multiple responses
-    if args.advantage_estimator == "ppo":
+    if args.advantage_estimator == "ppo" or args.n_samples_per_prompt == 1:
         return {}
 
     def _is_zero_std(samples: list[Sample]):
