@@ -243,9 +243,9 @@ def compute_policy_loss(
     clipfrac = torch.gt(pg_losses2, pg_losses1).float()
 
     if eps_clip_c is not None:
-        assert (
-            eps_clip_c > 1.0
-        ), f"The lower bound of the clip_ratio_c for dual-clip PPO should be greater than 1.0, but get the value: {eps_clip_c}."
+        assert eps_clip_c > 1.0, (
+            f"The lower bound of the clip_ratio_c for dual-clip PPO should be greater than 1.0, but get the value: {eps_clip_c}."
+        )
         pg_losses3 = -eps_clip_c * advantages
         clip_pg_losses2 = torch.min(pg_losses3, clip_pg_losses1)
         pg_losses = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
@@ -323,8 +323,7 @@ def _split_replicated_loss_gather_grad(
     expected_last_dim = local_last_dim * world_size
     if grad_output.size(-1) != expected_last_dim:
         raise RuntimeError(
-            "True-on-policy replicated-loss gather backward expected the full padded "
-            f"vocab dimension to be {expected_last_dim}, got {grad_output.size(-1)}."
+            f"True-on-policy replicated-loss gather backward expected the full padded vocab dimension to be {expected_last_dim}, got {grad_output.size(-1)}."
         )
 
     return torch.narrow(grad_output, dim=-1, start=rank * local_last_dim, length=local_last_dim).contiguous()
@@ -373,7 +372,6 @@ class _ReplicatedLossAllGatherLastDim(torch.autograd.Function):
 
 # from https://github.com/volcengine/verl/blob/0bdf7f469854815177e73dcfe9e420836c952e6e/verl/utils/megatron/tensor_parallel.py#L99
 class _VocabParallelEntropy(torch.autograd.Function):
-
     @staticmethod
     def forward(ctx, vocab_parallel_logits: torch.Tensor, process_group: dist.ProcessGroup) -> torch.Tensor:
 
@@ -862,6 +860,7 @@ def calculate_log_probs_and_entropy(
     chunk_size: int = -1,
     true_on_policy: bool = False,
     vocab_size: int | None = None,
+    entropy_requires_grad: bool = False,
 ):
     if true_on_policy:
         return _calculate_log_probs_and_entropy_true_on_policy(
@@ -890,13 +889,21 @@ def calculate_log_probs_and_entropy(
             if with_entropy:
                 entropys = []
                 for _, logits_chunk in zip(tokens_chunks, logits_chunks, strict=True):
-                    entropy = compute_entropy_from_logits(logits_chunk.clone(), tp_group)
+                    if entropy_requires_grad:
+                        entropy = compute_entropy_from_logits(logits_chunk.clone(), tp_group)
+                    else:
+                        with torch.no_grad():
+                            entropy = compute_entropy_from_logits(logits_chunk.clone(), tp_group)
                     entropys.append(entropy)
                 entropy = torch.cat(entropys, dim=0)
         else:
             log_prob = compute_log_probs(logits.clone(), tokens, tp_group)
             if with_entropy:
-                entropy = compute_entropy_from_logits(logits.clone(), tp_group)
+                if entropy_requires_grad:
+                    entropy = compute_entropy_from_logits(logits.clone(), tp_group)
+                else:
+                    with torch.no_grad():
+                        entropy = compute_entropy_from_logits(logits.clone(), tp_group)
     else:
         log_prob = logits.new_zeros((0,))
         if with_entropy:

@@ -180,6 +180,7 @@ def get_log_probs_and_entropy(
             chunk_size=args.log_probs_chunk_size,
             true_on_policy=args.true_on_policy_mode,
             vocab_size=getattr(args, "vocab_size", None),
+            entropy_requires_grad=getattr(args, "entropy_coef", 0.0) != 0.0,
         )
 
         log_probs_list.append(log_prob.squeeze(-1))
