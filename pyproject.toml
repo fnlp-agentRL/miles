@@ -89,7 +89,7 @@ torchvision = { index = "pytorch-cu130" }
 apex = { url = "https://github.com/yueming-yuan/miles-wheels/releases/download/cu130-x86_64/apex-0.1-cp312-cp312-linux_x86_64.whl" }
 fake-int4-quant-cuda = { url = "https://github.com/yueming-yuan/miles-wheels/releases/download/cu130-x86_64/fake_int4_quant_cuda-0.0.0-cp312-cp312-linux_x86_64.whl" }
 # flash-attn = { url = "https://github.com/yueming-yuan/miles-wheels/releases/download/cu130-x86_64/flash_attn-2.7.4.post1-cp312-cp312-linux_x86_64.whl" }
-flash-attn-3 = { url = "https://github.com/yueming-yuan/miles-wheels/releases/download/cu130-x86_64/flash_attn_3-3.0.0b1-cp39-abi3-linux_x86_64.whl" }
+flash-attn-3 = { url = "https://github.com/fnlp-agentRL/AvaWheels/releases/download/fa3-cu130-x86_64/flash_attn_3-3.0.0b1-1-cp39-abi3-linux_x86_64.whl" }
 mbridge = { git = "https://github.com/ISEEKYAN/mbridge.git", rev = "89eb10887887bc74853f89a4de258c0702932a1c" }
 torch-memory-saver = { git = "https://github.com/fzyzcjy/torch_memory_saver.git", rev = "d64a639" }
 megatron-bridge = { git = "https://github.com/radixark/Megatron-Bridge.git", rev = "6fde1c8538ea4ad966c7fba5f759be54f943b598" }
