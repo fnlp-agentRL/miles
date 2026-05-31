@@ -170,15 +170,8 @@ class RolloutManager:
     # TODO may parallelly execute offload/onload across services
     async def offload(self, tags: list[str] | None = None):
         self._health_monitoring_pause()
-        if tags is not None:
-            handles = [
-                engine.release_memory_occupation.remote(tags=tags)
-                for engine in self._rollout_engines
-                if engine is not None
-            ]
-            return await asyncio.gather(*handles)
         for srv in self.servers.values():
-            await srv.offload()
+            await srv.offload(tags=tags)
 
     async def onload(self, tags: list[str] | None = None):
         for srv in self.servers.values():
