@@ -893,7 +893,7 @@ def calculate_log_probs_and_entropy(
                         entropy = compute_entropy_from_logits(logits_chunk.clone(), tp_group)
                     else:
                         with torch.no_grad():
-                            entropy = compute_entropy_from_logits(logits_chunk.clone(), tp_group)
+                            entropy = compute_entropy_from_logits(logits_chunk.detach(), tp_group)
                     entropys.append(entropy)
                 entropy = torch.cat(entropys, dim=0)
         else:
@@ -903,7 +903,7 @@ def calculate_log_probs_and_entropy(
                     entropy = compute_entropy_from_logits(logits.clone(), tp_group)
                 else:
                     with torch.no_grad():
-                        entropy = compute_entropy_from_logits(logits.clone(), tp_group)
+                        entropy = compute_entropy_from_logits(logits.detach(), tp_group)
     else:
         log_prob = logits.new_zeros((0,))
         if with_entropy:
