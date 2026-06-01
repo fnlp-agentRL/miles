@@ -137,9 +137,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     state = GenerateState(args)
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
-    assert (
-        sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
-    ), f"Sample status is {sample.status}"
+    assert sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED, (
+        f"Sample status is {sample.status}"
+    )
 
     if state.processor and sample.multimodal_inputs and any(v is not None for v in sample.multimodal_inputs.values()):
         processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
@@ -154,9 +154,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(prompt_ids)
 
-    assert (
-        sampling_params["max_new_tokens"] >= 0
-    ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
+    assert sampling_params["max_new_tokens"] >= 0, (
+        f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
+    )
     if sampling_params["max_new_tokens"] == 0:
         sample.status = Sample.Status.TRUNCATED
         return sample
@@ -186,7 +186,13 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             sample.tokens = prompt_ids
 
     # Use session_id for consistent hashing routing if router uses consistent_hashing policy
-    headers = None
+    headers = {
+        "X-Request-ID": str(uuid.uuid4())
+        + "-sample_index-"
+        + str(sample.index)
+        + "-group_index-"
+        + str(sample.group_index)
+    }
     if args.sglang_router_policy == "consistent_hashing" and sample.session_id:
         headers = {"X-SMG-Routing-Key": sample.session_id}
 
