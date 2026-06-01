@@ -15,6 +15,7 @@ except ImportError:
     pq = None
 
 from miles.utils import chat_template_utils
+from miles.utils.processing_utils import call_processor
 from miles.utils.types import MultimodalTypes, Sample
 
 from .timer import Timer
