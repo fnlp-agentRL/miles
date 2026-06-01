@@ -8,8 +8,10 @@ import time
 import aiohttp
 
 from miles.rollout.data_source import DataSource
+from miles.rollout.filter_hub.base_types import call_dynamic_filter
 from miles.rollout.sglang_rollout import GenerateState, generate_and_rm_group
 from miles.utils.async_utils import run
+from miles.utils.misc import load_function
 from miles.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -94,7 +96,7 @@ class AsyncRolloutWorker:
         print("Continuous async rollout worker started")
 
         active_tasks = set()
-        max_concurrent_tasks = self.args.rollout_batch_size
+        max_concurrent_tasks = self.args.over_sampling_batch_size
         group_id_counter = 0
 
         while self.running:
@@ -206,10 +208,17 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer: DataSource)
 
     use_staleness_filter = getattr(args, "max_weight_staleness", None) is not None
 
+    # Dynamic sampling filter: drop uninformative groups (e.g. zero reward std), mirroring sglang_rollout.
+    dynamic_filter = load_function(args.dynamic_sampling_filter_path)
+    dynamic_filter_drops = 0
+    dynamic_filter_drop_reasons = {}
+
     print(f"Starting async rollout generation for {target_data_size} groups")
     print(f"Global worker queue size: {worker.get_queue_size()}")
     if use_staleness_filter:
         print(f"Staleness filter enabled: max_weight_staleness={args.max_weight_staleness}")
+    if dynamic_filter is not None:
+        print(f"Dynamic sampling filter enabled: {args.dynamic_sampling_filter_path}")
 
     # Main loop: collect results from global worker's output queue
     start_time = time.time()
@@ -283,6 +292,20 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer: DataSource)
                     # don't count as processed for training
                     continue
 
+            dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
+            if not dynamic_filter_output.keep:
+                dynamic_filter_drops += 1
+                # show current group num and dropped group num
+                dynamic_filter_drop_reasons[dynamic_filter_output.reason] = (
+                    dynamic_filter_drop_reasons.get(dynamic_filter_output.reason, 0) + 1
+                )
+                print(
+                    f"Current group num: {len(data)}, Dropped group num: {dynamic_filter_drops}, Dropped reasons: {dynamic_filter_drop_reasons}",
+                    flush=True,
+                )
+
+                continue
+
             if do_print:
                 print(
                     f"First rollout sample: {[group[0].prompt + group[0].response]}, "
@@ -291,7 +314,6 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer: DataSource)
                 )
                 do_print = False
 
-            # Simplified: directly add samples, no filters used
             data.append(group)
             processed_any = True
 
@@ -318,6 +340,8 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer: DataSource)
             f"avg_staleness={avg_staleness:.1f}, "
             f"max_staleness={max(staleness_values) if staleness_values else 0}"
         )
+    if dynamic_filter is not None:
+        print(f"Dynamic filter stats: dropped={dynamic_filter_drops}")
 
     if data:
         print(
