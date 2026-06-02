@@ -1,19 +1,21 @@
 """Fully-async rollout using random tokens and random rewards.
 
-Exercises the entire async rollout <-> trainer loop for agentic-like toy data. 
-Each Sample drives a multi-turn loop:
+Exercises the entire async rollout <-> trainer loop for agentic-like toy data.
+Each Sample drives a loop (multi-turn when ``MULTI_TURN`` is set, otherwise a
+single request):
 
   1. start with a random ``input_ids`` sequence,
   2. POST it to the SGLang router's ``/generate`` endpoint
      (``ignore_eos=True``, ``max_new_tokens`` capped per turn),
-  3. append the engine's response + random filler tokens to ``input_ids``
-     and send the extended sequence as the next turn,
-  4. stop when accumulated context exceeds ``MAX_CONTEXT_TOKENS``,
+  3. if ``MULTI_TURN``: append the engine's response + random filler tokens to
+     ``input_ids`` and send the extended sequence as the next turn,
+  4. stop after one turn (single-turn) or when accumulated context exceeds
+     ``MAX_CONTEXT_TOKENS`` (multi-turn),
   5. assign a uniformly random reward.
 
 Use this to smoke-test the async pipeline (rollout worker, weight sync,
 trainer queue) and to stress-test SGLang under realistic multi-turn
-long-context load. 
+long-context load.
 
 Wire it up via::
 
@@ -33,9 +35,10 @@ import random
 import threading
 import time
 
+import httpx
 import numpy as np
 import pybase64
-from random_async_sglang_metrics import SGLangMetricsReporter, record_agent_request
+from random_async_sglang_metrics import SGLangMetricsReporter, record_agent_request, record_post_sent
 
 from miles.rollout.data_source import DataSource
 from miles.utils.async_utils import run
@@ -47,7 +50,7 @@ logger = logging.getLogger(__name__)
 # Random tokens never trigger EOS, so ``ignore_eos=True`` plus a hard
 # ``max_new_tokens`` cap (drawn from this range) is what terminates each turn.
 PROMPT_TOKEN_RANGE = (50, 2800)
-MAX_TOKENS_RANGE = (512, 2048)
+MAX_TOKENS_RANGE = (51200, 150000)
 FILLER_RATIO = 3.0
 # Cap on accumulated context per Sample. The multi-turn loop appends each
 # turn's response + filler to the next request's input_ids until this is
@@ -56,10 +59,31 @@ MAX_CONTEXT_TOKENS = int(os.environ.get("RANDOM_ASYNC_MAX_CONTEXT_TOKENS", "6000
 # Concurrent in-flight SGLang requests target ``CONCURRENCY_PER_GPU`` per
 # prefill GPU; each Sample drives one request at a time within its multi-turn
 # loop, so this translates to a max-concurrent-Samples bound.
-CONCURRENCY_PER_GPU = int(os.environ.get("RANDOM_ASYNC_CONCURRENCY_PER_GPU", "64"))
+CONCURRENCY_PER_GPU = int(os.environ.get("RANDOM_ASYNC_CONCURRENCY_PER_GPU", "48"))
+# When True, each Sample runs the multi-turn loop (append response + filler,
+# resend, repeat until ``MAX_CONTEXT_TOKENS``). When False, each Sample is a
+# single request: send the random prompt once, take the response, assign a
+# reward, and finalise — no filler and no append/resend loop.
+MULTI_TURN = os.environ.get("RANDOM_ASYNC_MULTI_TURN", "1").lower() not in ("0", "false", "no")
 # Qwen3.5-35B vocab size; works for any model with vocab >= this.
 VOCAB_SIZE = 151643
+# Read timeout: how long to wait for generation to stream a response back.
 SGLANG_REQUEST_TIMEOUT_SECONDS = int(os.environ.get("RANDOM_ASYNC_SGLANG_REQUEST_TIMEOUT_SECONDS", str(30 * 60)))
+# Connection-establishment timeout: fail fast if the router/engine is unreachable
+# instead of waiting out the long read timeout on a dead connection.
+SGLANG_CONNECT_TIMEOUT_SECONDS = int(os.environ.get("RANDOM_ASYNC_SGLANG_CONNECT_TIMEOUT_SECONDS", "30"))
+# Fine-grained per-request timeout: short connect/write, long read for slow
+# generation. ``pool`` matches ``read`` so requests may queue for a free
+# connection under high concurrency without spuriously timing out.
+SGLANG_HTTPX_TIMEOUT = httpx.Timeout(
+    connect=SGLANG_CONNECT_TIMEOUT_SECONDS,
+    write=SGLANG_CONNECT_TIMEOUT_SECONDS,
+    read=SGLANG_REQUEST_TIMEOUT_SECONDS,
+    pool=SGLANG_REQUEST_TIMEOUT_SECONDS,
+)
+# Hard wall-clock backstop over the whole attempt (incl. any distributed-post
+# fallback retry), so a request can't outlive the read timeout indefinitely.
+SGLANG_TOTAL_TIMEOUT_SECONDS = SGLANG_REQUEST_TIMEOUT_SECONDS + SGLANG_CONNECT_TIMEOUT_SECONDS + 60
 
 
 def _rand_ids(n: int) -> list[int]:
@@ -78,11 +102,15 @@ def _decode_routed_experts(args, encoded: str, token_count: int, start_len: int 
 
 
 async def _generate_one_random_sample(args, sample: Sample) -> Sample:
-    """Multi-turn rollout against SGLang with random prompts, fillers, and reward.
+    """Rollout against SGLang with random prompts, fillers, and reward.
 
-    Send a request, take the engine's response, append response + random filler
-    to the running ``input_ids``, send the extended sequence as the next turn —
-    until the accumulated context exceeds ``MAX_CONTEXT_TOKENS``.
+    In multi-turn mode (``MULTI_TURN=True``): send a request, take the engine's
+    response, append response + random filler to the running ``input_ids``, send
+    the extended sequence as the next turn — until the accumulated context
+    exceeds ``MAX_CONTEXT_TOKENS``.
+
+    In single-turn mode (``MULTI_TURN=False``): send one request and finalise
+    the Sample with that turn's response (no filler, no resend).
     """
     prompt_ids = _rand_ids(random.randint(*PROMPT_TOKEN_RANGE))
     current_ids = list(prompt_ids)
@@ -93,7 +121,7 @@ async def _generate_one_random_sample(args, sample: Sample) -> Sample:
     start_time = time.time()
     turns = 0
     perfect_cacheable_prefix_len = 0
-    sticky_dp_rank = sample.index % args.rollout_num_gpus_per_engine
+    sticky_dp_rank = sample.index % (args.sglang_dp_size or 1)
     use_routing_replay = getattr(args, "use_rollout_routing_replay", False)
     routed_experts_chunks: list[np.ndarray] = []
     routed_experts_start_len = 0
@@ -112,25 +140,30 @@ async def _generate_one_random_sample(args, sample: Sample) -> Sample:
                 "ignore_eos": True,
             },
             "return_logprob": True,
-            # Keep each sample on one prefill DP rank, and tell decode exactly
-            # which prefill DP owns the KV instead of relying on room queries.
+            # Pin each sample to one DP rank so its prefix-cache KV stays put.
+            # ``sglang_dp_size`` is the DP-rank space (1 when DP attention is
+            # off); cross-engine stickiness comes from the routing key below.
+            # No ``disagg_prefill_dp_rank``: this deployment is not PD-disaggregated.
             "routed_dp_rank": sticky_dp_rank,
-            "disagg_prefill_dp_rank": sticky_dp_rank,
         }
         if use_routing_replay:
             payload["return_routed_experts"] = True
             payload["routed_experts_start_len"] = routed_experts_start_len
         headers = {"x-smg-routing-key": f"random-async-sample-{sample.index}"}
         request_start = time.monotonic()
+        # Count the POST at send time (max_retries=1 → one HTTP attempt per call),
+        # so the rollout-side sent count can be compared with the router's received count.
+        record_post_sent()
         try:
             data = await asyncio.wait_for(
-                http_post(url, payload, max_retries=1, headers=headers),
-                timeout=SGLANG_REQUEST_TIMEOUT_SECONDS,
+                http_post(url, payload, max_retries=1, headers=headers, timeout=SGLANG_HTTPX_TIMEOUT),
+                timeout=SGLANG_TOTAL_TIMEOUT_SECONDS,
             )
-        except TimeoutError as e:
+        except (httpx.TimeoutException, asyncio.TimeoutError) as e:
             raise TimeoutError(
-                "SGLang /generate timed out after "
-                f"{SGLANG_REQUEST_TIMEOUT_SECONDS}s "
+                f"SGLang /generate timed out ({type(e).__name__}; "
+                f"connect={SGLANG_CONNECT_TIMEOUT_SECONDS}s, read={SGLANG_REQUEST_TIMEOUT_SECONDS}s, "
+                f"total={SGLANG_TOTAL_TIMEOUT_SECONDS}s) "
                 f"(sample_index={sample.index}, group_index={sample.group_index}, "
                 f"input_tokens={len(current_ids)}, max_new_tokens={max_new_tokens})"
             ) from e
@@ -173,7 +206,7 @@ async def _generate_one_random_sample(args, sample: Sample) -> Sample:
             request_time=request_duration,
         )
 
-        filler = _rand_ids(int(len(out_tokens) * FILLER_RATIO))
+        filler = _rand_ids(int(len(out_tokens) * FILLER_RATIO)) if MULTI_TURN else []
         if use_routing_replay and len(out_tokens) + len(filler) >= remaining_tokens:
             # R3 replay requires routed experts for every final token. Filler is
             # covered by the next turn's prompt, so do not let filler end a sample.
@@ -197,6 +230,8 @@ async def _generate_one_random_sample(args, sample: Sample) -> Sample:
         if "weight_version" in meta:
             sample.weight_versions.append(meta["weight_version"])
 
+        if not MULTI_TURN:
+            break
         if len(current_ids) >= MAX_CONTEXT_TOKENS:
             break
 
@@ -286,8 +321,8 @@ class AsyncRandomRolloutWorker:
             router_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
             self.metrics_reporter = SGLangMetricsReporter(
                 router_url=router_url,
-                prefill_num_gpus=args.rollout_num_gpus_per_engine,
-                decode_num_gpus=args.rollout_num_gpus_per_engine,
+                prefill_num_gpus=args.rollout_num_gpus,
+                decode_num_gpus=args.rollout_num_gpus,
             )
 
     def _make_random_group(self) -> list[Sample]:
@@ -306,7 +341,7 @@ class AsyncRandomRolloutWorker:
         active: dict[asyncio.Task, int] = {}
         max_concurrent_groups = max(
             1,
-            (CONCURRENCY_PER_GPU * self.args.rollout_num_gpus_per_engine) // self.args.n_samples_per_prompt,
+            (CONCURRENCY_PER_GPU * self.args.rollout_num_gpus) // self.args.n_samples_per_prompt,
         )
         gid_counter = 0
 

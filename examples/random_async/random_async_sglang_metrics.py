@@ -17,7 +17,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-METRICS_INTERVAL_SECONDS = float(os.environ.get("RANDOM_ASYNC_SGLANG_METRICS_INTERVAL_SECONDS", "30"))
+METRICS_INTERVAL_SECONDS = float(os.environ.get("RANDOM_ASYNC_SGLANG_METRICS_INTERVAL_SECONDS", "10"))
 
 _METRIC_RE = re.compile(
     r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(?P<labels>[^}]*)\})?\s+"
@@ -33,6 +33,7 @@ _AGENT_WINDOW: dict[str, float] = {
     "request_time": 0.0,
     "max_request_time": 0.0,
     "request_count": 0.0,
+    "posts_sent": 0.0,
 }
 _AGENT_CUMULATIVE: dict[str, float] = {
     "output_tokens": 0.0,
@@ -40,6 +41,7 @@ _AGENT_CUMULATIVE: dict[str, float] = {
     "cached_tokens": 0.0,
     "perfect_cacheable_tokens": 0.0,
     "request_count": 0.0,
+    "posts_sent": 0.0,
 }
 
 
@@ -48,6 +50,17 @@ class MetricSample:
     name: str
     labels: dict[str, str]
     value: float
+
+
+def record_post_sent() -> None:
+    """Count one POST issued by the rollout, at send time.
+
+    Incremented before the request is awaited, so it counts every POST sent
+    regardless of success/timeout — letting you compare the rollout-side sent
+    count against the router's received count to spot dropped/lost requests.
+    """
+    with _AGENT_METRICS_LOCK:
+        _AGENT_WINDOW["posts_sent"] += 1
 
 
 def record_agent_request(
@@ -74,8 +87,18 @@ def _pop_agent_metrics() -> dict[str, float]:
         for key in _AGENT_WINDOW:
             _AGENT_WINDOW[key] = 0.0
 
+    metrics: dict[str, float] = {}
+
+    # POSTs the rollout issued, counted at send time (independent of success).
+    # Emitted even when no request completed, since a large sent-vs-completed
+    # gap is exactly the dropped/lost-request signal worth surfacing.
+    if window["posts_sent"] > 0:
+        _AGENT_CUMULATIVE["posts_sent"] += window["posts_sent"]
+        metrics["random_async_sglang/agent_posts_sent"] = window["posts_sent"]
+        metrics["random_async_sglang/agent_posts_sent_total"] = _AGENT_CUMULATIVE["posts_sent"]
+
     if window["request_count"] == 0:
-        return {}
+        return metrics
 
     _AGENT_CUMULATIVE["output_tokens"] += window["output_tokens"]
     _AGENT_CUMULATIVE["prompt_tokens"] += window["prompt_tokens"]
@@ -87,16 +110,19 @@ def _pop_agent_metrics() -> dict[str, float]:
     cached_tokens = window["cached_tokens"]
     perfect_cacheable_tokens = window["perfect_cacheable_tokens"]
     request_count = window["request_count"]
-    return {
-        "random_async_sglang/agent_perfect_cache_hit_rate": (
-            perfect_cacheable_tokens / prompt_tokens if prompt_tokens > 0 else 0.0
-        ),
-        "random_async_sglang/agent_cache_to_perfect_cache_ratio": (
-            cached_tokens / perfect_cacheable_tokens if perfect_cacheable_tokens > 0 else 0.0
-        ),
-        "random_async_sglang/agent_avg_request_time": window["request_time"] / request_count,
-        "random_async_sglang/agent_max_request_time": window["max_request_time"],
-    }
+    metrics.update(
+        {
+            "random_async_sglang/agent_perfect_cache_hit_rate": (
+                perfect_cacheable_tokens / prompt_tokens if prompt_tokens > 0 else 0.0
+            ),
+            "random_async_sglang/agent_cache_to_perfect_cache_ratio": (
+                cached_tokens / perfect_cacheable_tokens if perfect_cacheable_tokens > 0 else 0.0
+            ),
+            "random_async_sglang/agent_avg_request_time": window["request_time"] / request_count,
+            "random_async_sglang/agent_max_request_time": window["max_request_time"],
+        }
+    )
+    return metrics
 
 
 def _parse_labels(raw: str | None) -> dict[str, str]:
@@ -129,7 +155,14 @@ def parse_openmetrics(text: str) -> list[MetricSample]:
 def _matches_engine_type(labels: dict[str, str], engine_type: str | None) -> bool:
     if engine_type is None:
         return True
-    return labels["engine_type"] == engine_type
+    label_value = labels.get("engine_type")
+    if label_value is None:
+        # A non-PD-disaggregated (unified) deployment emits no ``engine_type``
+        # label. Such an engine serves both prefill and decode, so it matches
+        # either query — otherwise the hard ``labels["engine_type"]`` lookup
+        # would KeyError, or a ``.get`` mismatch would zero out every metric.
+        return True
+    return label_value == engine_type
 
 
 def _sum(samples: list[MetricSample], name: str, *, engine_type: str | None = None, mode: str | None = None) -> float:
@@ -172,6 +205,7 @@ class SGLangMetricsReporter:
         self._thread: threading.Thread | None = None
         self.failure: BaseException | None = None
         self._previous_realtime_tokens: dict[str, float] = {}
+        self._previous_requests_received: float | None = None
         self._previous_time: float | None = None
         self._last_failure_log_time = 0.0
 
@@ -199,6 +233,7 @@ class SGLangMetricsReporter:
                 metrics.update(self._build_metrics(samples, start))
                 metrics.update(_pop_agent_metrics())
                 if metrics:
+                    self._print_metrics(metrics)
                     self._log_to_wandb(metrics)
             except Exception:
                 now = time.time()
@@ -221,15 +256,36 @@ class SGLangMetricsReporter:
         if prefill_cache_hit_rate is not None:
             metrics["random_async_sglang/sglang_cache_hit_rate"] = prefill_cache_hit_rate
 
+        # Running/queue depth, summed across every worker regardless of
+        # engine_type. SGLang only attaches an ``engine_type`` label under PD
+        # disaggregation, so the old per-engine split silently dropped these keys
+        # (or reported 0) on a unified deployment. The aggregate is correct for
+        # both: unified -> the single engine's depth, PD -> prefill + decode.
+        for name, key in (
+            ("sglang_num_running_reqs", "running_reqs"),
+            ("sglang_num_queue_reqs", "queue_reqs"),
+        ):
+            if _has(samples, name):
+                metrics[f"random_async_sglang/{key}"] = _sum(samples, name)
+
+        # Requests the engines have accepted over their lifetime (cumulative
+        # counter). The per-window delta pairs with ``agent_posts_sent`` to spot a
+        # gap between POSTs the rollout issued and requests the engines received.
+        if _has(samples, "sglang_num_requests_total"):
+            received_total = _sum(samples, "sglang_num_requests_total")
+            metrics["random_async_sglang/requests_received_total"] = received_total
+            previous = self._previous_requests_received
+            if previous is not None:
+                delta = received_total - previous
+                if delta >= 0:
+                    metrics["random_async_sglang/requests_received"] = delta
+            self._previous_requests_received = received_total
+
         for engine_type in ("prefill", "decode"):
-            for name, suffix in (
-                ("sglang_token_usage", "token_usage"),
-                ("sglang_num_queue_reqs", "queue_reqs"),
-                ("sglang_num_running_reqs", "running_reqs"),
-            ):
-                if _has(samples, name, engine_type=engine_type):
-                    value = _sum(samples, name, engine_type=engine_type)
-                    metrics[f"random_async_sglang/{engine_type}_{suffix}"] = value
+            if _has(samples, "sglang_token_usage", engine_type=engine_type):
+                metrics[f"random_async_sglang/{engine_type}_token_usage"] = _sum(
+                    samples, "sglang_token_usage", engine_type=engine_type
+                )
 
         for name, key in (
             ("sglang_num_prefill_prealloc_queue_reqs", "prefill_prealloc_queue_reqs"),
@@ -283,6 +339,19 @@ class SGLangMetricsReporter:
         self._previous_time = now
 
         return metrics
+
+    def _print_metrics(self, metrics: dict[str, float]) -> None:
+        """Print every collected metric in an aligned, readable block.
+
+        Runs regardless of whether a W&B run is active, so the metrics are
+        always visible in stdout/logs even when wandb isn't reachable.
+        """
+        width = max(len(name) for name in metrics)
+        lines = [f"  {name:<{width}}  {value:>14.4f}" for name, value in sorted(metrics.items())]
+        print(
+            f"[random_async_sglang metrics] {len(metrics)} keys\n" + "\n".join(lines),
+            flush=True,
+        )
 
     def _log_to_wandb(self, metrics: dict[str, float]) -> None:
         import wandb
