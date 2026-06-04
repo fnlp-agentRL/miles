@@ -141,7 +141,7 @@ def compute_samples_from_openai_records(
                 f"trim_count {trim_count} exceeds allowed={allowed} "
                 f"(is_last={is_last}, max_trim_tokens={max_trim_tokens}); "
                 f"output_ids[-3:]={output_ids[-3:]}, "
-                f"accumulated[cursor:cursor+3]={accumulated_token_ids[cursor:cursor+3]}"
+                f"accumulated[cursor:cursor+3]={accumulated_token_ids[cursor : cursor + 3]}"
             )
 
             # Step 4: advance cursor past matched output to the next turn
@@ -191,6 +191,8 @@ def _compute_sample_from_openai_record(
             sample.status = Sample.Status.TRUNCATED
         case "abort":
             sample.status = Sample.Status.ABORTED
+        case "repeat":
+            sample.status = Sample.Status.REPEATED
 
     sample.prefix_cache_info.add(choice.get("meta_info", {}))
     if "weight_version" in choice["meta_info"]:

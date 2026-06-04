@@ -84,6 +84,9 @@ class GenerateState(metaclass=SingletonMeta):
             skip_special_tokens=args.rollout_skip_special_tokens,
             no_stop_trim=True,
             spaces_between_special_tokens=False,
+            repeat_min_count=args.rollout_repeat_min_count,
+            repeat_min_length=args.rollout_repeat_min_length,
+            repeat_max_length=args.rollout_repeat_max_length,
         )
 
         if getattr(args, "sglang_enable_deterministic_inference", False):
@@ -545,6 +548,9 @@ async def eval_rollout_single_dataset(
         skip_special_tokens=args.rollout_skip_special_tokens,
         no_stop_trim=True,
         spaces_between_special_tokens=False,
+        repeat_min_count=args.rollout_repeat_min_count,
+        repeat_min_length=args.rollout_repeat_min_length,
+        repeat_max_length=args.rollout_repeat_max_length,
     )
 
     tasks = []

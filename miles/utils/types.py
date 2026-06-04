@@ -35,6 +35,7 @@ class Sample:
         COMPLETED = "completed"
         TRUNCATED = "truncated"
         ABORTED = "aborted"
+        REPEATED = "repeated"
         # Indicates a recoverable or non-critical failure during generation (e.g., tool call failure,
         # external API error, parsing error). Unlike ABORTED, FAILED samples may still contain partial
         # valid output and can be retried or handled gracefully.
@@ -155,17 +156,17 @@ class Sample:
 
     def validate(self):
         assert self.response_length >= 0, f"response_length must be >= 0, got {self.response_length}"
-        assert (
-            len(self.tokens) >= self.response_length
-        ), f"tokens length ({len(self.tokens)}) must be >= response_length ({self.response_length})"
+        assert len(self.tokens) >= self.response_length, (
+            f"tokens length ({len(self.tokens)}) must be >= response_length ({self.response_length})"
+        )
         if self.loss_mask is not None:
-            assert (
-                len(self.loss_mask) == self.response_length
-            ), f"loss_mask length ({len(self.loss_mask)}) != response_length ({self.response_length})"
+            assert len(self.loss_mask) == self.response_length, (
+                f"loss_mask length ({len(self.loss_mask)}) != response_length ({self.response_length})"
+            )
         if self.rollout_log_probs is not None:
-            assert (
-                len(self.rollout_log_probs) == self.response_length
-            ), f"rollout_log_probs length ({len(self.rollout_log_probs)}) != response_length ({self.response_length})"
+            assert len(self.rollout_log_probs) == self.response_length, (
+                f"rollout_log_probs length ({len(self.rollout_log_probs)}) != response_length ({self.response_length})"
+            )
         if self.rollout_routed_experts is not None:
             actual = len(self.rollout_routed_experts)
             expect = len(self.tokens) - 1
@@ -175,9 +176,9 @@ class Sample:
         """Remove the last *n* output tokens and all associated per-token info."""
         if n <= 0:
             return
-        assert (
-            n <= self.response_length
-        ), f"cannot strip {n} tokens: only {self.response_length} output tokens available"
+        assert n <= self.response_length, (
+            f"cannot strip {n} tokens: only {self.response_length} output tokens available"
+        )
         self.tokens = self.tokens[:-n]
         self.response_length -= n
         if self.rollout_log_probs is not None:
@@ -237,6 +238,9 @@ class Sample:
                 self.status = Sample.Status.TRUNCATED
             case "abort":
                 self.status = Sample.Status.ABORTED
+            case "repeat":
+                self.status = Sample.Status.REPEATED
+                self.metadata["repeat_length"] = meta_info["finish_reason"]["repeat_length"]
             case "stop":
                 self.status = Sample.Status.COMPLETED
 

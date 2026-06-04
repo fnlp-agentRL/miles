@@ -371,6 +371,34 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--rollout-repeat-min-count",
+                type=int,
+                default=0,
+                help=(
+                    "Hash-based repetition early stop: the number of consecutive repetitions of a token "
+                    "sequence that triggers an early stop during rollout. Set to 0 (default) to disable."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-repeat-min-length",
+                type=int,
+                default=1,
+                help=(
+                    "Hash-based repetition early stop: the minimum length (in tokens) of the repeated "
+                    "sequence to consider when detecting repetitions. Must be at least 1."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-repeat-max-length",
+                type=int,
+                default=None,
+                help=(
+                    "Hash-based repetition early stop: the maximum length (in tokens) of the repeated "
+                    "sequence to consider. If set, must be >= rollout_repeat_min_length. None (default) "
+                    "means no upper bound."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-shuffle",
                 action="store_true",
                 default=False,
