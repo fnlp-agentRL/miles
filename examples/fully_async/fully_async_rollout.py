@@ -1,6 +1,7 @@
 import asyncio
 import atexit
 import logging
+import os
 import queue
 import threading
 import time
@@ -15,6 +16,23 @@ from miles.utils.misc import load_function
 from miles.utils.types import Sample
 
 logger = logging.getLogger(__name__)
+
+
+METRICS_LOG_INTERVAL_SECONDS = float(os.environ.get("FULLY_ASYNC_METRICS_INTERVAL_SECONDS", "10"))
+_SGLANG_METRIC_NAMES = ("sglang_num_running_reqs", "sglang_num_queue_reqs", "sglang_num_requests_total")
+
+
+def _parse_sglang_metrics(text: str) -> dict[str, float]:
+    """Sum the ``_SGLANG_METRIC_NAMES`` lines from an OpenMetrics dump."""
+    totals: dict[str, float] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name = line.split("{", 1)[0].split()[0]
+        if name in _SGLANG_METRIC_NAMES:
+            totals[name] = totals.get(name, 0.0) + float(line.rsplit(maxsplit=1)[-1])
+    return totals
 
 
 def group_oldest_weight_version(group: list[Sample]) -> int | None:
@@ -90,6 +108,23 @@ class AsyncRolloutWorker:
         self.output_queue = queue.Queue(maxsize=1000)  # Continuous output queue
         self.worker_thread = None
         self.state = GenerateState(args)
+        # Own submitted-task accounting (read by the periodic metrics log).
+        self.submitted_groups = 0  # groups (tasks) handed to generate_and_rm_group
+        self.completed_groups = 0  # groups whose task finished
+
+    async def query_sglang_metrics(self) -> tuple[dict[str, float], str | None]:
+
+        url = f"http://{self.args.sglang_router_ip}:{self.args.sglang_router_port}/engine_metrics"
+        try:
+            connector = aiohttp.TCPConnector(force_close=True)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    body = await resp.text()
+                    if resp.status != 200:
+                        return {}, f"HTTP {resp.status}: {body.strip()[:200]}"
+                    return _parse_sglang_metrics(body), None
+        except Exception as e:
+            return {}, f"{type(e).__name__}: {e}"
 
     async def continuous_worker_loop(self):
         """Continuous work loop - constantly get data from data_buffer and process"""
@@ -98,6 +133,7 @@ class AsyncRolloutWorker:
         active_tasks = set()
         max_concurrent_tasks = self.args.over_sampling_batch_size
         group_id_counter = 0
+        last_metrics_log = time.monotonic()
 
         while self.running:
             try:
@@ -110,6 +146,7 @@ class AsyncRolloutWorker:
                         except Exception as e:
                             print(f"Task failed with exception: {e}")
                     active_tasks -= done_tasks
+                    self.completed_groups += len(done_tasks)
 
                 # If active task count hasn't reached limit, try to get new data and start tasks
                 while len(active_tasks) < max_concurrent_tasks and self.running:
@@ -139,7 +176,28 @@ class AsyncRolloutWorker:
 
                         task.add_done_callback(make_callback(group_id))
                         active_tasks.add(task)
+                        self.submitted_groups += 1
                         break
+
+                # Periodically log own submission counters + live SGLang depth.
+                now = time.monotonic()
+                if now - last_metrics_log >= METRICS_LOG_INTERVAL_SECONDS:
+                    last_metrics_log = now
+                    sg, sg_err = await self.query_sglang_metrics()
+                    if sg_err is None:
+                        sglang_str = (
+                            f"running={sg.get('sglang_num_running_reqs')}, "
+                            f"queued={sg.get('sglang_num_queue_reqs')}, "
+                            f"received_total={sg.get('sglang_num_requests_total')}"
+                        )
+                    else:
+                        sglang_str = f"unavailable ({sg_err})"
+                    print(
+                        f"[fully_async worker] submitted_groups={self.submitted_groups}, "
+                        f"completed_groups={self.completed_groups}, active_tasks={len(active_tasks)}, "
+                        f"output_queue={self.get_queue_size()} | sglang: {sglang_str}",
+                        flush=True,
+                    )
 
                 # Brief sleep to avoid busy waiting
                 await asyncio.sleep(1)
