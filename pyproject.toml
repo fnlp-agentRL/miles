@@ -93,8 +93,8 @@ flash-attn-3 = { url = "https://github.com/fnlp-agentRL/AvaWheels/releases/downl
 mbridge = { git = "https://github.com/ISEEKYAN/mbridge.git", rev = "89eb10887887bc74853f89a4de258c0702932a1c" }
 torch-memory-saver = { git = "https://github.com/fzyzcjy/torch_memory_saver.git", rev = "d64a639" }
 megatron-bridge = { git = "https://github.com/radixark/Megatron-Bridge.git", rev = "6fde1c8538ea4ad966c7fba5f759be54f943b598" }
-megatron-core = { workspace = true }
-sglang = { workspace = true }
+# megatron-core = { workspace = true }
+# sglang = { workspace = true }
 sglang-router = { url = "https://github.com/yueming-yuan/miles-wheels/releases/download/cu130-x86_64/sglang_router-0.3.2-cp38-abi3-manylinux_2_39_x86_64.whl" }
 
 [[tool.uv.index]]
