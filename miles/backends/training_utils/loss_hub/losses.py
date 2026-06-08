@@ -17,6 +17,7 @@ from miles.backends.training_utils.loss_hub.math_utils import (
     compute_gspo_kl,
     compute_opsm_mask,
     compute_policy_loss,
+    compute_cispo_loss,
 )
 from miles.backends.training_utils.parallel import get_parallel_state
 from miles.utils.misc import load_function
@@ -174,8 +175,12 @@ def policy_loss_function(
         torch.nan_to_num(advantages, nan=0.0, posinf=0.0, neginf=0.0),
         advantages.new_zeros(()),
     )
-
-    pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
+    if args.advantage_estimator == "cispo":
+        pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, advantages, args.eps_clip_high, log_probs)
+    else:
+        pg_loss, pg_clipfrac = compute_policy_loss(
+            ppo_kl, advantages, args.eps_clip, args.eps_clip_high, args.eps_clip_c
+        )
 
     if getattr(args, "dump_details", None) is not None:
         from miles.backends.training_utils.debug_dump import maybe_dump_policy_loss_debug

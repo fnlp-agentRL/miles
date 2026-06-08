@@ -255,6 +255,20 @@ def compute_policy_loss(
     return pg_losses, clipfrac
 
 
+@torch.compile(dynamic=True)
+def compute_cispo_loss(
+    ppo_kl: torch.Tensor,
+    advantages: torch.Tensor,
+    eps_clip_high: float,
+    log_probs: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    ratio = (-ppo_kl).exp().detach()
+    clip_ratio = torch.minimum(ratio, eps_clip_high)
+    pg_losses = -clip_ratio * advantages * log_probs
+    clipfrac = torch.lt(clip_ratio, ratio).float()
+    return pg_losses, clipfrac
+
+
 def compute_log_probs(
     logits: torch.Tensor,
     tokens: torch.Tensor,

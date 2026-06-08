@@ -959,6 +959,7 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "reinforce_plus_plus_baseline",
                     "ppo",
                     "on_policy_distillation",
+                    "cispo",
                 ],
                 default="grpo",
             )
@@ -2082,9 +2083,9 @@ def miles_validate_args(args):
         # (expert_dim=1 buffers in SGLang).
         if args.experts_shared_outer_loras:
             args.sglang_experts_shared_outer_loras = True
-        assert args.experts_shared_outer_loras == bool(
-            args.sglang_experts_shared_outer_loras
-        ), "experts_shared_outer_loras and sglang_experts_shared_outer_loras must agree"
+        assert args.experts_shared_outer_loras == bool(args.sglang_experts_shared_outer_loras), (
+            "experts_shared_outer_loras and sglang_experts_shared_outer_loras must agree"
+        )
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
