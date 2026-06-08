@@ -226,6 +226,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             sample.rollout_log_probs = []
         sample.rollout_log_probs += new_response_log_probs
 
+    req_info = {"headers": headers, "payload": payload}
+    sample.metadata.setdefault("request", []).append(req_info)
+
     if "routed_experts" in output["meta_info"]:
         sample.rollout_routed_experts = np.frombuffer(
             pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii")),
@@ -252,7 +255,11 @@ async def generate_and_rm(
         sample.loss_mask = [0] * sample.response_length
 
     # For samples with existing response, check if they're complete
-    if sample.status == Sample.Status.COMPLETED or sample.status == Sample.Status.TRUNCATED:
+    if (
+        sample.status == Sample.Status.COMPLETED
+        or sample.status == Sample.Status.TRUNCATED
+        or sample.status == Sample.Status.REPEATED
+    ):
         assert sample.response is not None
         if not args.group_rm:
             assert sample.reward is not None
