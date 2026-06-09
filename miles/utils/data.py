@@ -198,9 +198,16 @@ class Dataset:
         seed=42,
         apply_chat_template=False,
         apply_chat_template_kwargs=None,
+        data_filter=None,
     ):
+        # `data_filter` (optional) wraps the raw record stream produced by read_file:
+        # a callable `(records: Iterable[dict]) -> Iterable[dict]` that yields only the
+        # records to keep. When None, every record is processed (no filtering).
         origin_samples = []
-        for data in read_file(path):
+        reader = read_file(path)
+        if data_filter is not None:
+            reader = data_filter(reader)
+        for data in reader:
             # Both chat templates and multimodal inputs require conversation format (list of message dicts)
             as_conversation = apply_chat_template or (multimodal_keys is not None)
             prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)

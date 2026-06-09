@@ -712,6 +712,18 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "When need to add tools during apply_chat_template, you should provide the key for the tools in the prompt dataset."
                 ),
             )
+            parser.add_argument(
+                "--data-prefilter-path",
+                type=str,
+                default=None,
+                help=(
+                    "Dotted path to a callable `prefilter(args, record: dict) -> bool` "
+                    "(loaded via load_function). When set, each raw record read from "
+                    "--prompt-data is passed through it before processing; only records "
+                    "for which it returns truthy are kept, the rest are dropped. "
+                    "Applies to the training prompt dataset only (not eval)."
+                ),
+            )
 
             parser.add_argument(
                 "--start-rollout-id",

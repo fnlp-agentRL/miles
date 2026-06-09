@@ -87,6 +87,18 @@ class RolloutDataSource(DataSource):
                 if processor:
                     processor.save_pretrained(Path(d) / "processor")
 
+            # Build a record-stream filter that wraps Dataset's read_file: the user
+            # function `prefilter(args, record) -> bool` decides per record whether to
+            # keep it; failing records are dropped and iteration continues.
+            data_filter = None
+            if args.data_prefilter_path is not None:
+                prefilter_fn = load_function(args.data_prefilter_path)
+
+                def data_filter(records):
+                    for record in records:
+                        if prefilter_fn(args, record):
+                            yield record
+
             self.dataset = Dataset(
                 args.prompt_data,
                 tokenizer=tokenizer,
@@ -100,6 +112,7 @@ class RolloutDataSource(DataSource):
                 apply_chat_template=args.apply_chat_template,
                 apply_chat_template_kwargs=args.apply_chat_template_kwargs,
                 seed=args.rollout_seed,
+                data_filter=data_filter,
             )
             if self.args.rollout_shuffle:
                 self.dataset.shuffle(self.epoch_id)
