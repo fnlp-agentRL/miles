@@ -70,8 +70,14 @@ class Sample:
             return self.completion_token_num / self.spec_verify_ct if self.spec_verify_ct > 0 else 0.0
 
         def add(self, meta_info: dict):
-            self.spec_accept_token_num += meta_info.get("spec_accept_token_num", 0)
-            self.spec_draft_token_num += meta_info.get("spec_draft_token_num", 0)
+            self.spec_accept_token_num += meta_info.get(
+                "spec_accept_token_num",
+                meta_info.get("spec_num_correct_drafts", meta_info.get("spec_accepted_drafts", 0)),
+            )
+            self.spec_draft_token_num += meta_info.get(
+                "spec_draft_token_num",
+                meta_info.get("spec_num_proposed_drafts", meta_info.get("spec_proposed_drafts", 0)),
+            )
             self.spec_verify_ct += meta_info.get("spec_verify_ct", 0)
             self.completion_token_num += meta_info.get("completion_tokens", 0)
 
@@ -86,8 +92,14 @@ class Sample:
         @staticmethod
         def from_dict(data: dict):
             info = Sample.SpecInfo()
-            info.spec_accept_token_num = data.get("spec_accept_token_num", 0)
-            info.spec_draft_token_num = data.get("spec_draft_token_num", 0)
+            info.spec_accept_token_num = data.get(
+                "spec_accept_token_num",
+                data.get("spec_num_correct_drafts", data.get("spec_accepted_drafts", 0)),
+            )
+            info.spec_draft_token_num = data.get(
+                "spec_draft_token_num",
+                data.get("spec_num_proposed_drafts", data.get("spec_proposed_drafts", 0)),
+            )
             info.spec_verify_ct = data.get("spec_verify_ct", 0)
             info.completion_token_num = data.get("completion_token_num", 0)
             return info

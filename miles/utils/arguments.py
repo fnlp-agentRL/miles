@@ -1649,6 +1649,7 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
             """Add MTP training specific arguments."""
             reset_arg(parser, "--mtp-num-layers", type=int, default=None)
             reset_arg(parser, "--mtp-loss-scaling-factor", type=float, default=0.2)
+            reset_arg(parser, "--mtp-use-repeated-layer", action="store_true")
             parser.add_argument(
                 "--enable-mtp-training",
                 action="store_true",

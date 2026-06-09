@@ -628,6 +628,7 @@ def train(
                 config.param_sync_func = param_sync_func
                 pre_hook_enabled = True
 
+        mtp_loss_metrics = {}
         if args.enable_mtp_training:
             from megatron.core.transformer.multi_token_prediction import MTPLossLoggingHelper
 
@@ -639,15 +640,17 @@ def train(
                     torch.distributed.all_reduce(values, group=x)
                 if (x := tracker.get("avg_group")) is not None:
                     torch.distributed.all_reduce(values, group=x, op=torch.distributed.ReduceOp.AVG)
-                # here we assume only one mtp layer
-                mtp_losses = (tracker["values"] * mtp_loss_scale).item()
+                mtp_losses = values * mtp_loss_scale
+                mtp_loss_metrics["mtp_loss"] = mtp_losses.mean().item()
+                for i, mtp_loss in enumerate(mtp_losses):
+                    mtp_loss_metrics[f"mtp_{i + 1}_loss"] = mtp_loss.item()
                 MTPLossLoggingHelper.clean_loss_in_tracker()
 
                 # CI check: verify MTP loss is within expected bounds
                 if args.ci_test:
                     from miles.backends.megatron_utils.ci_utils import check_mtp_loss
 
-                    check_mtp_loss(mtp_losses)
+                    check_mtp_loss(mtp_loss_metrics["mtp_loss"])
 
         # per train step log.
         if is_megatron_main_rank():
@@ -657,7 +660,7 @@ def train(
 
             extra_metrics = {}
             if args.enable_mtp_training:
-                extra_metrics["mtp_loss"] = mtp_losses
+                extra_metrics.update(mtp_loss_metrics)
 
             if not disable_optimizer:
                 for param_group_id, param_group in enumerate(optimizer.param_groups):
