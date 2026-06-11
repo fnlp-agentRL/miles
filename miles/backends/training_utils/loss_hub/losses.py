@@ -250,7 +250,12 @@ def policy_loss_function(
         # Determine which loss_masks to use for pg_loss reducer
         pg_loss_masks = modified_response_masks if (args.get_mismatch_metrics or args.use_tis) else batch["loss_masks"]
         pg_loss_reducer = custom_pg_loss_reducer_func(
-            total_lengths, response_lengths, pg_loss_masks, args.calculate_per_token_loss
+            total_lengths,
+            response_lengths,
+            pg_loss_masks,
+            args.calculate_per_token_loss,
+            args.qkv_format,
+            max_seq_lens,
         )
     else:
         pg_loss_reducer = sum_of_sample_mean

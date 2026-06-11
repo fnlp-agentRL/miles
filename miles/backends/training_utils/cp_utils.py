@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .parallel import get_parallel_state
+import os
 
 try:
     from fla.ops.cp import build_cp_context as _fla_build_cp_context
@@ -136,6 +137,75 @@ def get_sum_of_sample_mean(
             return sum(
                 [
                     (x_i * chunked_loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+                    for x_i, chunked_loss_mask, loss_mask in zip(
+                        x.split(cp_chunk_lengths, dim=0), chunked_loss_masks, loss_masks, strict=True
+                    )
+                ]
+            )
+
+        def sum_of_token(x: torch.Tensor) -> torch.Tensor:
+            return sum(
+                [
+                    (x_i * chunked_loss_mask).sum()
+                    for x_i, chunked_loss_mask in zip(
+                        x.split(cp_chunk_lengths, dim=0), chunked_loss_masks, strict=True
+                    )
+                ]
+            )
+
+    return sum_of_sample_mean if not calculate_per_token_loss else sum_of_token
+
+
+def get_drgrpo_pgloss_reducer(
+    total_lengths: list[int],
+    response_lengths: list[int],
+    loss_masks: list[torch.Tensor],
+    calculate_per_token_loss: bool = False,
+    qkv_format: str = "thd",
+    max_seq_lens: list[int] | None = None,
+) -> Callable[[torch.Tensor], torch.Tensor]:
+    """
+    Calculate correct sample mean for CP
+    replace torch.clamp_min(loss_mask.sum(), 1) with DIVISOR
+    """
+
+    DIVISOR = float(os.environ.get("DIVISOR", None))
+    parallel_state = get_parallel_state()
+    cp_size = parallel_state.cp.size
+    if cp_size == 1:
+
+        def sum_of_sample_mean(x: torch.Tensor) -> torch.Tensor:
+            return sum(
+                [
+                    (x_i * loss_mask_i).sum() / DIVISOR
+                    for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)
+                ]
+            )
+
+        def sum_of_token(x: torch.Tensor) -> torch.Tensor:
+            return sum(
+                [
+                    (x_i * loss_mask_i).sum()
+                    for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)
+                ]
+            )
+
+    else:
+        cp_chunk_lengths = []
+        chunked_loss_masks = []
+        for i, (total_length, response_length, loss_mask) in enumerate(
+            zip(total_lengths, response_lengths, loss_masks, strict=True)
+        ):
+            max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
+            chunked_loss_masks.append(
+                _slice_loss_mask_for_local_cp(total_length, response_length, loss_mask, qkv_format, max_seq_len)
+            )
+            cp_chunk_lengths.append(chunked_loss_masks[i].size(0))
+
+        def sum_of_sample_mean(x: torch.Tensor) -> torch.Tensor:
+            return sum(
+                [
+                    (x_i * chunked_loss_mask).sum() / DIVISOR
                     for x_i, chunked_loss_mask, loss_mask in zip(
                         x.split(cp_chunk_lengths, dim=0), chunked_loss_masks, loss_masks, strict=True
                     )
@@ -440,7 +510,7 @@ def build_gdn_cp_context(module: nn.Module, cu_seqlens: torch.Tensor, device: to
         return None
     if _fla_build_cp_context is None:
         raise RuntimeError(
-            "Hybrid CP requires fla.ops.cp (flash-linear-attention >= 0.4.2) " "but it could not be imported."
+            "Hybrid CP requires fla.ops.cp (flash-linear-attention >= 0.4.2) but it could not be imported."
         )
     if cu_seqlens is None or cu_seqlens.numel() < 2:
         raise ValueError(f"Hybrid CP requires valid cu_seqlens (at least 2 elements) but got {cu_seqlens}")
