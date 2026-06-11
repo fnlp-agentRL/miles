@@ -263,7 +263,7 @@ def compute_cispo_loss(
     log_probs: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     ratio = (-ppo_kl).exp().detach()
-    clip_ratio = torch.minimum(ratio, eps_clip_high)
+    clip_ratio = ratio.clamp(max=eps_clip_high)
     pg_losses = -clip_ratio * advantages * log_probs
     clipfrac = torch.lt(clip_ratio, ratio).float()
     return pg_losses, clipfrac

@@ -29,7 +29,7 @@ def compute_advantages(
     Returns:
         (advantages, returns) — both lists of tensors, one per sample.
     """
-    if args.advantage_estimator in ["grpo", "gspo"]:
+    if args.advantage_estimator in ["grpo", "gspo", "cispo"]:
         rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?
@@ -152,9 +152,9 @@ def normalize_advantages(
         all_masks = torch.cat(mask_chunks)
 
     if all_masks.numel() > 0:
-        assert (
-            all_advs.size() == all_masks.size()
-        ), f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
+        assert all_advs.size() == all_masks.size(), (
+            f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
+        )
         dp_group = parallel_state.intra_dp.group
 
         whitened_advs_flat = distributed_masked_whiten(

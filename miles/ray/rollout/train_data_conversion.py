@@ -47,9 +47,9 @@ def convert_samples_to_train_data(
         if sample.loss_mask is None:
             sample.loss_mask = [1] * sample.response_length
 
-        assert (
-            len(sample.loss_mask) == sample.response_length
-        ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
+        assert len(sample.loss_mask) == sample.response_length, (
+            f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
+        )
         if sample.remove_sample:
             sample.loss_mask = [0] * sample.response_length
         loss_masks.append(sample.loss_mask)
@@ -95,7 +95,10 @@ def _post_process_rewards(args, samples: list[Sample] | list[list[Sample]], cust
         return f(args, samples)
 
     raw_rewards = [sample.get_reward_value(args) for sample in samples]
-    if args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
+    if (
+        args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline", "cispo"]
+        and args.rewards_normalization
+    ):
         # group norm
         rewards = torch.tensor(raw_rewards, dtype=torch.float)
         if rewards.shape[-1] == args.n_samples_per_prompt * args.rollout_batch_size:
@@ -106,7 +109,7 @@ def _post_process_rewards(args, samples: list[Sample] | list[list[Sample]], cust
         mean = rewards.mean(dim=-1, keepdim=True)
         rewards = rewards - mean
 
-        if args.advantage_estimator in ["grpo", "gspo"] and args.grpo_std_normalization:
+        if args.advantage_estimator in ["grpo", "gspo", "cispo"] and args.grpo_std_normalization:
             std = rewards.std(dim=-1, keepdim=True)
             rewards = rewards / (std + 1e-6)
 
