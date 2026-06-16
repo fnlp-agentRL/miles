@@ -161,6 +161,17 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 help="Extra environment variables for training process, e.g. PyTorch memory management ones.",
             )
             parser.add_argument(
+                "--skip-update-grad-norm-threshold",
+                type=float,
+                default=None,
+                help=(
+                    "If set, compute the (pre-clip) gradient norm before the optimizer step and "
+                    "skip the parameter/scheduler update for that step whenever the grad norm exceeds "
+                    "this threshold (the spiking batch is dropped). None (default) disables the gate. "
+                    "Megatron training backend only."
+                ),
+            )
+            parser.add_argument(
                 "--train-memory-margin-bytes",
                 type=int,
                 default=1024**3,
@@ -1009,6 +1020,7 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--entropy-coef", type=float, default=0.0, help="Entropy loss coef")
             parser.add_argument("--gamma", type=float, default=1.0, help="PPO GAE gamma")
             parser.add_argument("--lambd", type=float, default=1.0, help="PPO GAE lambd")
+            parser.add_argument("--quantile-k", type=float, default=None, help="QAE quantile k")
             parser.add_argument("--normalize-advantages", action="store_true", default=False)
             parser.add_argument(
                 "--disable-grpo-std-normalization",

@@ -106,7 +106,11 @@ def _post_process_rewards(args, samples: list[Sample] | list[list[Sample]], cust
         else:
             # when samples count are not equal in each group
             rewards = rewards.view(-1, rewards.shape[-1])
-        mean = rewards.mean(dim=-1, keepdim=True)
+        mean = (
+            rewards.mean(dim=-1, keepdim=True)
+            if args.quantile_k is None
+            else rewards.quantile(args.quantile_k, dim=-1, keepdim=True)
+        )
         rewards = rewards - mean
 
         if args.advantage_estimator in ["grpo", "gspo", "cispo"] and args.grpo_std_normalization:

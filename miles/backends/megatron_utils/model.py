@@ -130,8 +130,7 @@ def setup_model_and_optimizer(
     if args.debug_disable_optimizer:
         if is_megatron_main_rank():
             logger.warning(
-                "Skipping Megatron optimizer and LR scheduler initialization "
-                "because --debug-disable-optimizer is set."
+                "Skipping Megatron optimizer and LR scheduler initialization because --debug-disable-optimizer is set."
             )
         return model, None, None
 
@@ -370,7 +369,9 @@ def train_one_step(
         custom_before_train_step_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler)
 
     @dumper_phase_util.wrap_forward_step
-    def forward_step(data_iterator: DataIterator, model: GPTModel, return_schedule_plan: bool = False) -> tuple[
+    def forward_step(
+        data_iterator: DataIterator, model: GPTModel, return_schedule_plan: bool = False
+    ) -> tuple[
         torch.Tensor,
         Callable[[torch.Tensor], tuple[torch.Tensor, int, dict[str, torch.Tensor | list[str]]]],
     ]:
@@ -463,7 +464,11 @@ def train_one_step(
 
     valid_step = True
     grad_norm = 0.0
-    if (not disable_optimizer) and (not getattr(args, "check_for_nan_in_loss_and_grad", True)):
+    skip_grad_norm_threshold = getattr(args, "skip_update_grad_norm_threshold", None)
+    compute_grad_norm_early = (not getattr(args, "check_for_nan_in_loss_and_grad", True)) or (
+        skip_grad_norm_threshold is not None
+    )
+    if (not disable_optimizer) and compute_grad_norm_early:
         found_inf_flag = optimizer.prepare_grads()
         if found_inf_flag:
             valid_step = False
@@ -473,6 +478,18 @@ def train_one_step(
                 valid_step = not (torch.isnan(grad_norm) or torch.isinf(grad_norm))
             else:
                 valid_step = not (math.isnan(grad_norm) or math.isinf(grad_norm))
+
+    # Grad-norm skip gate: drop this batch's update when the pre-clip grad norm spikes.
+    skip_update = False
+    if valid_step and (not disable_optimizer) and skip_grad_norm_threshold is not None:
+        grad_norm_value = grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
+        if grad_norm_value > skip_grad_norm_threshold:
+            skip_update = True
+            logger.warning(
+                f"[grad-norm-skip] rollout {rollout_id} step {step_id}: "
+                f"grad_norm={grad_norm_value:.4f} > threshold {skip_grad_norm_threshold}; "
+                f"skipping optimizer and scheduler update for this batch"
+            )
 
     # CI check: verify only MTP parameters have non-zero gradients when truncation happens
     # This check must happen before optimizer.step() as gradients may be modified during step
@@ -486,7 +503,7 @@ def train_one_step(
     # step and subsequent zero_grad release them.
     dumper_phase_util.finalize(model)
 
-    if not disable_optimizer and valid_step:
+    if not disable_optimizer and valid_step and not skip_update:
         # Update parameters.
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
 
@@ -606,7 +623,6 @@ def train(
 
     # Run training iterations till done.
     for step_id in range(num_steps_per_rollout):
-
         # Run training step.
         loss_dict, grad_norm = train_one_step(
             args,

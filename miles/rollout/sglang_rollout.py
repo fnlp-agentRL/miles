@@ -132,7 +132,7 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size += len(samples)
 
 
-async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
+async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, Any], timeout=None) -> Sample:
     """Generate using traditional SGLang router with token-based workflow"""
     if args.ci_test:
         assert isinstance(sample.prompt, str)
@@ -199,7 +199,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if args.sglang_router_policy == "consistent_hashing" and sample.session_id:
         headers = {"X-SMG-Routing-Key": sample.session_id}
 
-    output = await post(url, payload, headers=headers)
+    output = await post(url, payload, headers=headers, timeout=timeout)
 
     if args.use_miles_router and "RadixTreeMiddleware" in args.miles_router_middleware_paths:
         from miles.router.middleware_hub.radix_tree_middleware import postprocess_sample_with_radix_tree
@@ -249,6 +249,7 @@ async def generate_and_rm(
     sample: Sample | list[Sample],
     sampling_params: dict[str, Any],
     evaluation: bool = False,
+    timeout=None,
 ) -> Sample | list[Sample]:
     # mask previous off-policy generation for partial rollout
     if args.partial_rollout and args.mask_offpolicy_in_partial_rollout and sample.response_length > 0:
@@ -284,7 +285,7 @@ async def generate_and_rm(
                 )
                 sample = output.samples
             else:
-                sample = await generate(args, sample, sampling_params)
+                sample = await generate(args, sample, sampling_params, timeout=timeout)
 
     # for the rm that need the whole group, we will not do the rm here
     if args.group_rm:
@@ -313,7 +314,7 @@ async def generate_and_rm(
 
 
 async def generate_and_rm_group(
-    args: Namespace, group: list[Sample], sampling_params: dict[str, Any], evaluation: bool = False
+    args: Namespace, group: list[Sample], sampling_params: dict[str, Any], evaluation: bool = False, timeout=None
 ) -> list[Sample]:
     state = GenerateState(args)
 
@@ -333,7 +334,9 @@ async def generate_and_rm_group(
             seed = state.group_sampling_seeds[idx]
             current_sampling_params["sampling_seed"] = seed
         tasks.append(
-            asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
+            asyncio.create_task(
+                generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation, timeout=timeout)
+            )
         )
 
     group = await asyncio.gather(*tasks)
