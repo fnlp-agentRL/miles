@@ -158,17 +158,12 @@ def init_wandb_secondary(args, router_addr=None):
 
 
 def _init_wandb_common():
-    _MAX_GLOB_DEPTH = 4  # margin over the deepest observed key
-    step_axis = {
-        "train": "train/step",
-        "rollout": "rollout/step",
-        "perf": "rollout/step",
-        "multi_turn": "rollout/step",
-        "passrate": "rollout/step",
-        "eval": "eval/step",
-    }
-    for step_metric in ("train/step", "rollout/step", "eval/step"):
-        wandb.define_metric(step_metric)
-    for prefix, step_metric in step_axis.items():
-        for depth in range(1, _MAX_GLOB_DEPTH + 1):
-            wandb.define_metric("/".join([prefix, *["*"] * depth]), step_metric=step_metric)
+    wandb.define_metric("train/step")
+    wandb.define_metric("train/*", step_metric="train/step")
+    wandb.define_metric("rollout/step")
+    wandb.define_metric("rollout/*", step_metric="rollout/step")
+    wandb.define_metric("multi_turn/*", step_metric="rollout/step")
+    wandb.define_metric("passrate/*", step_metric="rollout/step")
+    wandb.define_metric("eval/step")
+    wandb.define_metric("eval/*", step_metric="eval/step")
+    wandb.define_metric("perf/*", step_metric="rollout/step")
