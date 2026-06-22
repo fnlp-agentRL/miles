@@ -32,6 +32,6 @@ class MetricGatherer:
 
     def collect(self):
         return {
-            f"rollout/dynamic_filter/drop_{reason}": count
+            f"rollout/dynamic_filter_drop_{reason}": count
             for reason, count in self._dynamic_filter_drop_reason_count.items()
         }
