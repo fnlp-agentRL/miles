@@ -230,10 +230,11 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     sample.metadata.setdefault("request", []).append(req_info)
 
     if "routed_experts" in output["meta_info"]:
+        routed_experts_decoded = pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii"))
         sample.rollout_routed_experts = np.frombuffer(
-            pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii")),
-            dtype=np.int32,
-        ).reshape(
+            routed_experts_decoded,
+            dtype=np.uint8,
+        ).astype(np.int32).reshape(
             len(sample.tokens) - 1,
             args.num_layers,
             args.moe_router_topk,
