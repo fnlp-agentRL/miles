@@ -1680,6 +1680,17 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help="Enable MTP layer parameter updates during training",
             )
+            parser.add_argument(
+                "--exclude-mtp-grad",
+                action="store_true",
+                default=False,
+                help=(
+                    "Exclude MTP-only parameters (model.mtp.*) from the gradient-norm "
+                    "statistic. MTP loss is isolated to these params, so clip / skip-gate / "
+                    "logged grad_norm then reflect the pure main-loss gradient, and an extra "
+                    "`mtp_grad_norm` metric is logged. Megatron training backend only."
+                ),
+            )
 
             return parser
 

@@ -36,6 +36,7 @@ from .ci_utils import (
     compute_model_hashes_by_layer,
     save_model_hashes,
 )
+from .grad_norm_utils import grad_norms_split_by_mtp, optimizer_step_excluding_mtp
 from .initialize import is_megatron_main_rank
 from .lora_utils import is_lora_enabled, is_lora_model
 from .model_provider import get_model_provider_func
@@ -464,6 +465,11 @@ def train_one_step(
 
     valid_step = True
     grad_norm = 0.0
+    # When enabled, MTP-only params (model.mtp.*) are excluded from the grad norm, so
+    # clip / skip-gate / logged grad_norm reflect the pure main-loss gradient, and the
+    # MTP-only norm is logged separately as `mtp_grad_norm`.
+    exclude_mtp_grad = getattr(args, "exclude_mtp_grad", False)
+    mtp_grad_norm = None
     skip_grad_norm_threshold = getattr(args, "skip_update_grad_norm_threshold", None)
     compute_grad_norm_early = (not getattr(args, "check_for_nan_in_loss_and_grad", True)) or (
         skip_grad_norm_threshold is not None
@@ -473,7 +479,10 @@ def train_one_step(
         if found_inf_flag:
             valid_step = False
         else:
-            grad_norm = optimizer.get_grad_norm()
+            if exclude_mtp_grad:
+                grad_norm, mtp_grad_norm = grad_norms_split_by_mtp(optimizer, model)
+            else:
+                grad_norm = optimizer.get_grad_norm()
             if isinstance(grad_norm, torch.Tensor):
                 valid_step = not (torch.isnan(grad_norm) or torch.isinf(grad_norm))
             else:
@@ -505,7 +514,12 @@ def train_one_step(
 
     if not disable_optimizer and valid_step and not skip_update:
         # Update parameters.
-        update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
+        if exclude_mtp_grad:
+            update_successful, grad_norm, num_zeros_in_grad, mtp_grad_norm = (
+                optimizer_step_excluding_mtp(optimizer, model, args.clip_grad)
+            )
+        else:
+            update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
 
         # Update learning rate.
         assert update_successful
@@ -519,6 +533,8 @@ def train_one_step(
 
     if mpu.is_pipeline_last_stage(ignore_virtual=True):
         loss_reduced = aggregate_train_losses(losses_reduced)
+        if mtp_grad_norm is not None:
+            loss_reduced["mtp_grad_norm"] = float(mtp_grad_norm)
         return loss_reduced, grad_norm
     return {}, grad_norm
 
