@@ -48,6 +48,10 @@ class Replay:
     def clear_forward(self):
         self.forward_index = 0
 
+    def rewind(self):
+        self.forward_index = 0
+        self.backward_index = 0
+
 
 class BaseReplayManager:
     name: str = ""
@@ -77,6 +81,10 @@ class BaseReplayManager:
     def clear_all_forward(self):
         for replay in self.replays:
             replay.clear_forward()
+
+    def rewind_all(self):
+        for replay in self.replays:
+            replay.rewind()
 
     def get_topk_fn(self, old_topk_fn, return_probs):
         manager = self

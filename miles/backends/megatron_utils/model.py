@@ -23,6 +23,7 @@ from megatron.training.training import get_model
 
 from miles.utils.dumper_utils import DumperMegatronUtil, DumperPhase
 from miles.utils.memory_utils import clear_memory
+from miles.utils.replay_base import all_replay_managers
 
 from ..training_utils.ci_utils import check_grad_norm, check_kl
 from ..training_utils.data import DataIterator, get_batch
@@ -411,8 +412,6 @@ def train_one_step(
             allgather_cp=args.allgather_cp,
         )
 
-        from miles.utils.replay_base import all_replay_managers
-
         old_stages = [m.stage for m in all_replay_managers]
         for m in all_replay_managers:
             m.stage = "replay_forward"
@@ -636,14 +635,24 @@ def train(
         pre_hook_enabled = False
 
     num_steps_per_rollout = len(num_microbatches)
+    total_steps = args.ppo_epochs * num_steps_per_rollout
 
     # Run training iterations till done.
-    for step_id in range(num_steps_per_rollout):
+    for global_step_id in range(total_steps):
+        ppo_epoch, step_id = divmod(global_step_id, num_steps_per_rollout)
+        if step_id == 0 and ppo_epoch > 0:
+            # Rewind the data iterators and routing-replay cursors for another pass.
+            for iterator in data_iterator:
+                iterator.reset()
+            for replay_manager in all_replay_managers:
+                if replay_manager.enabled:
+                    replay_manager.rewind_all()
+
         # Run training step.
         loss_dict, grad_norm = train_one_step(
             args,
             rollout_id,
-            step_id,
+            global_step_id,
             data_iterator,
             model,
             optimizer,
@@ -651,7 +660,7 @@ def train(
             num_microbatches[step_id],
         )
 
-        if step_id == 0:
+        if global_step_id == 0:
             # Enable forward pre-hook after training step has successfully run. All subsequent
             # forward passes will use the forward pre-hook / `param_sync_func` in
             # `forward_backward_func`.
@@ -686,7 +695,7 @@ def train(
 
         # per train step log.
         if is_megatron_main_rank():
-            accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
+            accumulated_step_id = rollout_id * total_steps + global_step_id
             role = getattr(model[0], "role", "actor")
             role_tag = "" if role == "actor" else f"{role}-"
 
@@ -703,15 +712,15 @@ def train(
                 loss_dict=loss_dict,
                 grad_norm=grad_norm,
                 rollout_id=rollout_id,
-                step_id=step_id,
-                num_steps_per_rollout=num_steps_per_rollout,
+                step_id=global_step_id,
+                num_steps_per_rollout=total_steps,
                 role=role,
                 extra_metrics=extra_metrics,
                 should_log=True,
             )
 
             if args.ci_test and not args.ci_disable_kl_checker:
-                check_kl(args, log_dict, step_id, accumulated_step_id)
+                check_kl(args, log_dict, global_step_id, accumulated_step_id)
 
             logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict}")
 
@@ -720,7 +729,7 @@ def train(
                     args=args,
                     grad_norm=grad_norm,
                     rollout_id=rollout_id,
-                    step_id=step_id,
+                    step_id=global_step_id,
                     role=role,
                     rank=parallel_state.intra_dp.rank,
                 )

@@ -931,6 +931,15 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 help="number of iterations to linearly warmup for critic model.",
             )
 
+            parser.add_argument(
+                "--ppo-epochs",
+                type=int,
+                default=1,
+                help=(
+                    "Number of optimization passes over each rollout. Advantages and old-policy "
+                    "log-probs are computed once and reused across passes."
+                ),
+            )
             parser.add_argument("--eps-clip", type=float, default=0.2, help="PPO clip range")
             parser.add_argument("--eps-clip-high", type=float, default=None, help="PPO clip upper range")
             parser.add_argument(
