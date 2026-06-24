@@ -158,6 +158,7 @@ class RolloutManager:
             data, metadata = postprocess_rollout_data(
                 self.args, data, train_parallel_config=self.train_parallel_config
             )
+            metrics = {**(metrics or {}), **(metadata.pop("metrics", {}) or {})}
 
         return data, metadata, metrics
 

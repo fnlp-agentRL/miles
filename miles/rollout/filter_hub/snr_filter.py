@@ -2,7 +2,7 @@ import itertools
 import logging
 import statistics
 
-__all__ = ["snr_aware_filter", "select_high_variance_nucleus", "group_reward_variance"]
+__all__ = ["snr_aware_filter", "select_high_variance_nucleus", "group_reward_variance", "variance_metrics"]
 
 logger = logging.getLogger(__name__)
 
@@ -43,17 +43,29 @@ def select_high_variance_nucleus(variances: list[float], keep_ratio: float) -> l
     return order[:k]
 
 
-def snr_aware_filter(args, data: list) -> list:
+def variance_metrics(variances: list[float]) -> dict[str, float]:
+    """Reward-variance stats across the rollout's prompt groups."""
+    return {
+        "rollout/group_reward_variance_mean": statistics.mean(variances) if variances else 0.0,
+        "rollout/group_reward_variance_max": max(variances, default=0.0),
+        "rollout/group_reward_variance_min": min(variances, default=0.0),
+    }
+
+
+def snr_aware_filter(args, data: list, variances: list[float]) -> tuple[list, dict[str, float]]:
     """Drop low-reward-variance prompt groups (RAGEN-2 SNR-Aware Filtering).
 
-    ``data`` is a list of prompt groups (each a list of samples). Returns the kept
-    groups in their original order.
+    ``data`` is a list of prompt groups (each a list of samples); ``variances`` is the
+    matching per-group reward variance. Returns the kept groups in their original
+    order, plus kept-count metrics.
     """
-    variances = [group_reward_variance(args, group) for group in data]
     kept_indices = set(select_high_variance_nucleus(variances, args.snr_filter_keep_ratio))
     kept = [group for i, group in enumerate(data) if i in kept_indices]
+    metrics = {
+        "rollout/snr_kept_ratio": len(kept) / len(data) if data else 0.0,
+    }
     logger.info(
         f"SNR-aware filter (keep_ratio={args.snr_filter_keep_ratio}): "
         f"kept {len(kept)}/{len(data)} groups by reward variance"
     )
-    return kept
+    return kept, metrics

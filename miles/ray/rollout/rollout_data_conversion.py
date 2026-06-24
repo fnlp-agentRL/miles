@@ -1,8 +1,7 @@
 import itertools
 import logging
 
-from miles.rollout.filter_hub.snr_filter import snr_aware_filter
-
+from miles.rollout.filter_hub.snr_filter import group_reward_variance, snr_aware_filter, variance_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -10,8 +9,12 @@ logger = logging.getLogger(__name__)
 def postprocess_rollout_data(args, data, train_parallel_config):
     metadata = {}
 
+    variances = [group_reward_variance(args, group) for group in data]
+    metrics = variance_metrics(variances)
     if args.snr_filter_keep_ratio is not None:
-        data = snr_aware_filter(args, data)
+        data, snr_metrics = snr_aware_filter(args, data, variances)
+        metrics = metrics | snr_metrics
+    metadata["metrics"] = metrics
 
     # flatten the data if it is a list of lists
     while isinstance(data[0], list):
