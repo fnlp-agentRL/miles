@@ -1648,6 +1648,16 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help="enable dynamic global batch size, disable trim samples in rollout buffer when converting samples to train data",
             )
+            parser.add_argument(
+                "--snr-filter-keep-ratio",
+                type=float,
+                default=None,
+                help=(
+                    "Keep ratio rho in (0, 1] for SNR-aware filtering: rank prompt groups by "
+                    "reward variance and keep the smallest top set whose cumulative variance reaches "
+                    "rho of the total, dropping the low-signal tail. Disabled when unset."
+                ),
+            )
             return parser
 
         def add_custom_megatron_plugins_arguments(parser):
@@ -2271,6 +2281,15 @@ def miles_validate_args(args):
         f"over_sampling_batch_size {args.over_sampling_batch_size} should be greater than or equal to "
         f"rollout_batch_size {args.rollout_batch_size}"
     )
+
+    if args.snr_filter_keep_ratio is not None:
+        assert 0.0 < args.snr_filter_keep_ratio <= 1.0, (
+            f"snr_filter_keep_ratio must be in (0, 1], got {args.snr_filter_keep_ratio}"
+        )
+        assert args.use_dynamic_global_batch_size, (
+            "snr_filter_keep_ratio requires --use-dynamic-global-batch-size so the kept groups are "
+            "split across num_steps_per_rollout with the per-step loss renormalized to them."
+        )
 
     if args.num_epoch is not None:
         if args.num_rollout is not None:

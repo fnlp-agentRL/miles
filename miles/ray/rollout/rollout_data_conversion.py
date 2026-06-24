@@ -1,12 +1,17 @@
 import itertools
 import logging
 
+from miles.rollout.filter_hub.snr_filter import snr_aware_filter
+
 
 logger = logging.getLogger(__name__)
 
 
 def postprocess_rollout_data(args, data, train_parallel_config):
     metadata = {}
+
+    if args.snr_filter_keep_ratio is not None:
+        data = snr_aware_filter(args, data)
 
     # flatten the data if it is a list of lists
     while isinstance(data[0], list):
@@ -35,30 +40,36 @@ def postprocess_rollout_data(args, data, train_parallel_config):
 
 
 def _compute_dynamic_global_batch_size(args, train_parallel_config, num_samples: int) -> int:
-    """Calculate dynamic global_batch_size to ensure only one training step.
+    """Calculate dynamic global_batch_size that splits num_samples across the
+    configured number of training steps.
 
-    Strategy: global_batch_size = num_samples rounded down to a multiple of dp_size
-    This ensures num_steps_per_rollout = num_samples // global_batch_size = 1
+    Strategy: global_batch_size = (num_samples // num_steps_per_rollout) rounded down
+    to a multiple of dp_size, so num_samples // global_batch_size == num_steps_per_rollout
+    (a single step when num_steps_per_rollout is unset).
     """
     dp_size = train_parallel_config["dp_size"]
     original_gbs = args.global_batch_size
+    num_steps = args.num_steps_per_rollout or 1
 
-    # Round down to a multiple of dp_size to ensure only one training step
-    dynamic_gbs = (num_samples // dp_size) * dp_size
+    # Round down to a multiple of dp_size so each step splits evenly across dp ranks.
+    dynamic_gbs = (num_samples // num_steps // dp_size) * dp_size
 
     if dynamic_gbs == 0:
         # Too few samples, use at least dp_size
         dynamic_gbs = dp_size
-        logger.warning(f"num_samples={num_samples} < dp_size={dp_size}, using dp_size as global_batch_size")
+        logger.warning(
+            f"num_samples={num_samples} too small for num_steps={num_steps} x dp_size={dp_size}, "
+            f"using dp_size as global_batch_size"
+        )
 
     # Calculate how many samples will be discarded
-    wasted = num_samples - dynamic_gbs
+    wasted = num_samples - dynamic_gbs * num_steps
 
     if dynamic_gbs != original_gbs or wasted > 0:
         logger.info(
             f"Dynamic global_batch_size: {original_gbs} -> {dynamic_gbs} "
             f"(num_samples={num_samples}, dp_size={dp_size}, "
-            f"num_steps=1, wasted={wasted})"
+            f"num_steps={num_steps}, wasted={wasted})"
         )
 
     return dynamic_gbs
