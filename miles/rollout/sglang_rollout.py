@@ -39,6 +39,22 @@ __all__ = ["generate_rollout", "get_model_url"]
 logger = logging.getLogger(__name__)
 
 
+def _decode_routed_experts(
+    routed_experts: str,
+    num_tokens: int,
+    num_layers: int,
+    moe_router_topk: int,
+) -> np.ndarray:
+    return np.frombuffer(
+        pybase64.b64decode(routed_experts.encode("ascii")),
+        dtype=np.int32,
+    ).reshape(
+        num_tokens,
+        num_layers,
+        moe_router_topk,
+    )
+
+
 def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate") -> str:
     """Return the router URL for a named model.
 
@@ -230,10 +246,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     sample.metadata.setdefault("request", []).append(req_info)
 
     if "routed_experts" in output["meta_info"]:
-        sample.rollout_routed_experts = np.frombuffer(
-            pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii")),
-            dtype=np.int32,
-        ).reshape(
+        sample.rollout_routed_experts = await asyncio.to_thread(
+            _decode_routed_experts,
+            output["meta_info"]["routed_experts"],
             len(sample.tokens) - 1,
             args.num_layers,
             args.moe_router_topk,
