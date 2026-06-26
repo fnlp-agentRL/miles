@@ -948,6 +948,23 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help="lower bound of the value for Dual-clip PPO from https://arxiv.org/pdf/1912.09729",
             )
+            parser.add_argument(
+                "--dppo-delta",
+                type=float,
+                default=None,
+                help=(
+                    "Divergence threshold for DPPO (arxiv 2602.04879). When set, the policy loss "
+                    "replaces PPO clipping with a per-token mask that zeroes the gradient once the "
+                    "policy diverges past this value from the behavior policy in the advantage direction."
+                ),
+            )
+            parser.add_argument(
+                "--dppo-divergence",
+                type=str,
+                choices=["tv", "kl"],
+                default="tv",
+                help="DPPO binary divergence estimate: total variation or Bernoulli KL.",
+            )
             parser.add_argument("--value-clip", type=float, default=0.2, help="the clip for value loss")
             parser.add_argument(
                 "--kl-coef",
@@ -2289,6 +2306,16 @@ def miles_validate_args(args):
         assert args.use_dynamic_global_batch_size, (
             "snr_filter_keep_ratio requires --use-dynamic-global-batch-size so the kept groups are "
             "split across num_steps_per_rollout with the per-step loss renormalized to them."
+        )
+
+    if args.dppo_delta is not None:
+        assert args.dppo_delta > 0, f"dppo_delta must be > 0, got {args.dppo_delta}"
+        assert args.use_rollout_logprobs, (
+            "dppo_delta requires --use-rollout-logprobs so the divergence anchors to the behavior policy."
+        )
+        assert not args.use_tis, "DPPO replaces PPO clipping and is incompatible with --use-tis."
+        assert args.advantage_estimator not in ("gspo", "cispo"), (
+            "DPPO is a per-token policy loss; it cannot combine with the gspo/cispo losses."
         )
 
     if args.num_epoch is not None:

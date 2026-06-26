@@ -14,10 +14,11 @@ from miles.backends.training_utils.loss_hub.logit_processors import get_log_prob
 from miles.backends.training_utils.loss_hub.math_utils import (
     compute_approx_kl,
     compute_ess_ratio_contribution,
+    compute_cispo_loss,
+    compute_dppo_loss,
     compute_gspo_kl,
     compute_opsm_mask,
     compute_policy_loss,
-    compute_cispo_loss,
 )
 from miles.backends.training_utils.parallel import get_parallel_state
 from miles.utils.misc import load_function
@@ -177,6 +178,10 @@ def policy_loss_function(
     )
     if args.advantage_estimator == "cispo":
         pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, advantages, args.eps_clip_high, log_probs)
+    elif args.dppo_delta is not None:
+        pg_loss, pg_clipfrac = compute_dppo_loss(
+            old_log_probs, log_probs, advantages, args.dppo_delta, args.dppo_divergence
+        )
     else:
         pg_loss, pg_clipfrac = compute_policy_loss(
             ppo_kl, advantages, args.eps_clip, args.eps_clip_high, args.eps_clip_c

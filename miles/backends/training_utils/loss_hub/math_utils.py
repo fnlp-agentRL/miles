@@ -269,6 +269,31 @@ def compute_cispo_loss(
     return pg_losses, clipfrac
 
 
+def compute_dppo_loss(
+    mu_log_probs: torch.Tensor,
+    pi_log_probs: torch.Tensor,
+    advantages: torch.Tensor,
+    delta: float,
+    divergence: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Unclipped surrogate ``r_t * A_t`` masked to zero per token once the policy
+    diverges past ``delta`` from the behavior policy in the advantage direction;
+    ``divergence`` is the binary (sampled-token vs. rest) ``tv`` or Bernoulli ``kl``."""
+    ratio = (pi_log_probs - mu_log_probs).exp()
+    mu = mu_log_probs.detach().exp()
+    pi = pi_log_probs.detach().exp()
+    if divergence == "kl":
+        mu = mu.clamp(1e-6, 1 - 1e-6)
+        pi = pi.clamp(1e-6, 1 - 1e-6)
+        div = mu * (mu / pi).log() + (1 - mu) * ((1 - mu) / (1 - pi)).log()
+    else:
+        div = (mu - pi).abs()
+    moved_away = ((advantages > 0) & (ratio.detach() > 1)) | ((advantages < 0) & (ratio.detach() < 1))
+    blocked = (div > delta) & moved_away
+    pg_losses = -(~blocked).to(ratio.dtype) * ratio * advantages
+    return pg_losses, blocked.to(ratio.dtype)
+
+
 def compute_log_probs(
     logits: torch.Tensor,
     tokens: torch.Tensor,
