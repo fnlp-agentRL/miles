@@ -509,7 +509,17 @@ async def generate_rollout_async(
         sampling_params=state.sampling_params,
     )
 
-    return RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect()), aborted_samples
+    prefilter_rewards = [
+        sample.get_reward_value(args)
+        for group in all_data
+        for sample in (sum(group, []) if group and isinstance(group[0], list) else group)
+        if sample.reward is not None
+    ]
+    metrics = metric_gatherer.collect()
+    if prefilter_rewards:
+        metrics = metrics | {"rollout/prefilter_reward": float(np.mean(prefilter_rewards))}
+
+    return RolloutFnTrainOutput(samples=data, metrics=metrics), aborted_samples
 
 
 EVAL_PROMPT_DATASET = {}
