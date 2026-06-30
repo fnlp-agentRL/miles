@@ -93,6 +93,45 @@ def aggregate_forward_results(
     return rollout_data
 
 
+def log_lld_metrics(args: Namespace, rollout_data: RolloutBatch, log_dict: dict[str, float], prefix: str = "lld") -> None:
+    """Online Lazy-Likelihood-Displacement monitor (arXiv:2512.04220).
+
+    Splits this step's responses into preferred (advantage > 0, ~ "correct" in
+    GRPO) vs dispreferred and logs their CP-correct mean policy log-prob. Watch
+    the TREND across rollout steps: healthy RL -> logp_preferred rises and the
+    gap grows; LLD -> logp_preferred falls/stagnates and the gap shrinks (the
+    death-spiral signature).
+    """
+    if "log_probs" not in rollout_data or "advantages" not in rollout_data:
+        return
+    cp_size = get_parallel_state().cp.size
+    masks = rollout_data["loss_masks"]
+    lps = [t.detach() for t in rollout_data["log_probs"]]
+
+    # Reuse the same CP-correct reducer the rollout loop uses (built once). Select a
+    # class by zeroing the log-probs of the other samples -> their per-sample mean
+    # becomes 0 and drops out; we then divide by the kept count.
+    sosm = get_sum_of_sample_mean(
+        rollout_data["total_lengths"], rollout_data["response_lengths"], masks,
+        qkv_format=args.qkv_format, max_seq_lens=rollout_data.get("max_seq_lens"),
+    )
+
+    def mean_logp(keep: list[bool]) -> float:
+        x = torch.cat([lp if k else torch.zeros_like(lp) for lp, k in zip(lps, keep, strict=True)])
+        return (cp_size * sosm(x) / max(sum(keep), 1)).item()
+
+    pref = [(a.detach() * m).sum().item() > 0 for a, m in zip(rollout_data["advantages"], masks, strict=True)]
+    lp_all = mean_logp([True] * len(masks))
+    lp_pref = mean_logp(pref) if any(pref) else lp_all  # fall back to all when a class is empty
+    lp_dis = mean_logp([not p for p in pref]) if not all(pref) else lp_all
+
+    log_dict[f"{prefix}_logp_preferred"] = lp_pref
+    log_dict[f"{prefix}_logp_dispreferred"] = lp_dis
+    log_dict[f"{prefix}_logp_gap"] = lp_pref - lp_dis
+    log_dict[f"{prefix}_conf_preferred"] = float(np.exp(lp_pref))
+    log_dict[f"{prefix}_frac_preferred"] = sum(pref) / len(masks)
+
+
 def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -> None:
     """
     Summarize rollout fields and log reduced metrics on PP last stage, TP rank 0.
@@ -167,6 +206,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                 raise ValueError(f"Unsupported type: {type(val)} for key: {key}")
             log_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
 
+        log_lld_metrics(args, rollout_data, log_dict)
         reduced_log_dict = gather_log_data("rollout", args, rollout_id, log_dict)
         if args.ci_test and not args.ci_disable_logprobs_checker and reduced_log_dict is not None:
             if (
