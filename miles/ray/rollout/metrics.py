@@ -75,6 +75,7 @@ def _compute_metrics_from_samples(args, samples):
 
     log_dict = {}
     log_dict |= dict_add_prefix(compute_statistics(response_lengths), "response_len/")
+    log_dict |= _compute_log_prob_metrics(args, samples)
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_spec_metrics(args, samples)
     log_dict |= _compute_prefix_cache_metrics(args, samples)
@@ -107,6 +108,24 @@ def _compute_metrics_from_samples(args, samples):
             # assistant_text mismatch is non-critical: assistant tokens are inherited
             # from the pretokenized prefix and may differ from canonical tokenization.
 
+    return log_dict
+
+
+def _compute_log_prob_metrics(args, samples):
+    # rollout_log_probs is per-token and only present when the rollout engine returns logprobs.
+    samples_with_log_prob = [s for s in samples if s.rollout_log_probs]
+    if not samples_with_log_prob:
+        return {}
+
+    # token-level: every per-token log prob across the whole batch (max/min = the single
+    # most/least likely token sampled this batch).
+    token_log_probs = [lp for s in samples_with_log_prob for lp in s.rollout_log_probs]
+    # sample-mean-level: each sample's mean log prob, then max/min over samples in the batch.
+    sample_mean_log_probs = [np.mean(s.rollout_log_probs).item() for s in samples_with_log_prob]
+
+    log_dict = {}
+    log_dict |= dict_add_prefix(compute_statistics(token_log_probs), "log_prob/token/")
+    log_dict |= dict_add_prefix(compute_statistics(sample_mean_log_probs), "log_prob/sample_mean/")
     return log_dict
 
 

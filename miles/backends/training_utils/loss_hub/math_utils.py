@@ -248,11 +248,13 @@ def compute_policy_loss(
         )
         pg_losses3 = -eps_clip_c * advantages
         clip_pg_losses2 = torch.min(pg_losses3, clip_pg_losses1)
+        clipfrac_lower = (torch.lt(clip_pg_losses2, clip_pg_losses1) & (advantages < 0)).float()
         pg_losses = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
     else:
         pg_losses = clip_pg_losses1
+        clipfrac_lower = torch.zeros_like(clipfrac)
 
-    return pg_losses, clipfrac
+    return pg_losses, clipfrac, clipfrac_lower
 
 
 @torch.compile(dynamic=True)
@@ -275,7 +277,8 @@ def compute_dppo_loss(
     advantages: torch.Tensor,
     delta: float,
     divergence: str,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    eps_clip_c: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Unclipped surrogate ``r_t * A_t`` masked to zero per token once the policy
     diverges past ``delta`` from the behavior policy in the advantage direction;
     ``divergence`` is the binary (sampled-token vs. rest) ``tv`` or Bernoulli ``kl``."""
@@ -291,7 +294,16 @@ def compute_dppo_loss(
     moved_away = ((advantages > 0) & (ratio.detach() > 1)) | ((advantages < 0) & (ratio.detach() < 1))
     blocked = (div > delta) & moved_away
     pg_losses = -(~blocked).to(ratio.dtype) * ratio * advantages
-    return pg_losses, blocked.to(ratio.dtype)
+    if eps_clip_c is not None:
+        assert eps_clip_c > 1.0, (
+            f"The lower bound of the clip_ratio_c for dual-clip PPO should be greater than 1.0, but get the value: {eps_clip_c}."
+        )
+        pg_losses3 = -eps_clip_c * advantages
+        clipfrac_lower = (torch.lt(pg_losses3, pg_losses) & (advantages < 0)).float()
+        pg_losses = torch.where(advantages < 0, torch.min(pg_losses3, pg_losses), pg_losses)
+    else:
+        clipfrac_lower = torch.zeros_like(pg_losses)
+    return pg_losses, blocked.to(ratio.dtype), clipfrac_lower
 
 
 def compute_log_probs(

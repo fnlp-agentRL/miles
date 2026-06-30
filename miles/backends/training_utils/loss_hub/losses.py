@@ -176,14 +176,15 @@ def policy_loss_function(
         torch.nan_to_num(advantages, nan=0.0, posinf=0.0, neginf=0.0),
         advantages.new_zeros(()),
     )
+    pg_clipfrac_lower = None
     if args.advantage_estimator == "cispo":
         pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, advantages, args.eps_clip_high, log_probs)
     elif args.dppo_delta is not None:
-        pg_loss, pg_clipfrac = compute_dppo_loss(
-            old_log_probs, log_probs, advantages, args.dppo_delta, args.dppo_divergence
+        pg_loss, pg_clipfrac, pg_clipfrac_lower = compute_dppo_loss(
+            old_log_probs, log_probs, advantages, args.dppo_delta, args.dppo_divergence, args.eps_clip_c
         )
     else:
-        pg_loss, pg_clipfrac = compute_policy_loss(
+        pg_loss, pg_clipfrac, pg_clipfrac_lower = compute_policy_loss(
             ppo_kl, advantages, args.eps_clip, args.eps_clip_high, args.eps_clip_c
         )
 
@@ -280,6 +281,8 @@ def policy_loss_function(
 
     pg_loss = pg_loss_reducer(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
+    if pg_clipfrac_lower is not None:
+        pg_clipfrac_lower = sum_of_sample_mean(pg_clipfrac_lower)
     ppo_kl = sum_of_sample_mean(ppo_kl)
 
     # entropy loss
@@ -349,6 +352,8 @@ def policy_loss_function(
         "ess_ratio": ess_ratio_sum.squeeze(),
     }
 
+    if pg_clipfrac_lower is not None:
+        reported_loss["pg_clipfrac_lower"] = pg_clipfrac_lower.clone().detach()
     if train_rollout_logprob_abs_diff is not None:
         reported_loss["train_rollout_logprob_abs_diff"] = train_rollout_logprob_abs_diff.clone().detach()
     if train_rollout_kl is not None:
