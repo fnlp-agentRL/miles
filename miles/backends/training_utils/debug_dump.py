@@ -36,6 +36,11 @@ def maybe_dump_policy_loss_debug(
     def to_cpu(tensor: torch.Tensor) -> torch.Tensor:
         return tensor.detach().float().cpu()
 
+    # Sample.index is a global running counter; each prompt group holds
+    # n_samples_per_prompt consecutive indices, so group_index == index // n.
+    sample_indices = batch.get("sample_indices")
+    n = args.n_samples_per_prompt
+
     samples = []
     for index, train_lp in enumerate(train_log_probs):
         sample = {
@@ -47,6 +52,9 @@ def maybe_dump_policy_loss_debug(
             "advantages": to_cpu(advantages[index]),
             "local_loss_mask": to_cpu(local_loss_masks[index]),
         }
+        if sample_indices is not None:
+            sample["group_index"] = sample_indices[index] // n
+            sample["in_group_id"] = sample_indices[index] % n
         if rollout_log_probs is not None:
             sample["rollout_log_probs"] = to_cpu(rollout_log_probs[index])
             if train_lp.shape == rollout_log_probs[index].shape:
