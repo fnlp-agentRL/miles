@@ -185,7 +185,26 @@ def _next_actor():
     return actor
 
 
-async def _post(client, url, payload, max_retries=60, action="post", headers=None, timeout=None):
+def _box_routed_experts(output):
+    if "routed_experts" in output["meta_info"]:
+        import ray
+
+        from miles.utils.ray_utils import Box
+
+        output["meta_info"]["routed_experts"] = Box(ray.put(output["meta_info"]["routed_experts"]))
+    return output
+
+
+async def _post(
+    client,
+    url,
+    payload,
+    max_retries=60,
+    action="post",
+    headers=None,
+    timeout=None,
+    box_routed_experts=False,
+):
     retry_count = 0
     while retry_count < max_retries:
         try:
@@ -218,6 +237,8 @@ async def _post(client, url, payload, max_retries=60, action="post", headers=Non
             continue
         break
 
+    if box_routed_experts and isinstance(output, dict) and "meta_info" in output:
+        output = _box_routed_experts(output)
     return output
 
 
@@ -269,7 +290,16 @@ def _init_ray_distributed_post(args):
             )
 
         async def do_post(self, url, payload, max_retries=60, action="post", headers=None, timeout=None):
-            return await _post(self._client, url, payload, max_retries, action=action, headers=headers, timeout=timeout)
+            return await _post(
+                self._client,
+                url,
+                payload,
+                max_retries,
+                action=action,
+                headers=headers,
+                timeout=timeout,
+                box_routed_experts=True,
+            )
 
     # Create actors per node
     created = []

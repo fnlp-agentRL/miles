@@ -8,7 +8,6 @@ from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
-import pybase64
 import sglang_router
 from packaging.version import parse
 from tqdm import tqdm
@@ -29,6 +28,7 @@ from miles.utils.processing_utils import (
     load_processor,
     load_tokenizer,
 )
+from miles.utils.routed_experts import decode_routed_experts, is_boxed_ray_ref
 from miles.utils.types import Sample
 
 from .generate_utils.prefill_logprobs import recompute_samples_rollout_logprobs_via_prefill
@@ -45,14 +45,7 @@ def _decode_routed_experts(
     num_layers: int,
     moe_router_topk: int,
 ) -> np.ndarray:
-    return np.frombuffer(
-        pybase64.b64decode(routed_experts.encode("ascii")),
-        dtype=np.int32,
-    ).reshape(
-        num_tokens,
-        num_layers,
-        moe_router_topk,
-    )
+    return decode_routed_experts(routed_experts, num_tokens, num_layers, moe_router_topk)
 
 
 def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate") -> str:
@@ -246,13 +239,19 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     sample.metadata.setdefault("request", []).append(req_info)
 
     if "routed_experts" in output["meta_info"]:
-        sample.rollout_routed_experts = await asyncio.to_thread(
-            _decode_routed_experts,
-            output["meta_info"]["routed_experts"],
-            len(sample.tokens) - 1,
-            args.num_layers,
-            args.moe_router_topk,
-        )
+        routed_experts = output["meta_info"]["routed_experts"]
+        if is_boxed_ray_ref(routed_experts):
+            sample.rollout_routed_experts = routed_experts
+        elif isinstance(routed_experts, str):
+            sample.rollout_routed_experts = await asyncio.to_thread(
+                _decode_routed_experts,
+                routed_experts,
+                len(sample.tokens) - 1,
+                args.num_layers,
+                args.moe_router_topk,
+            )
+        elif routed_experts is not None:
+            raise TypeError(f"Unsupported routed_experts payload type: {type(routed_experts).__name__}")
 
     sample.update_from_meta_info(args, output["meta_info"])
 

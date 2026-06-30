@@ -5,6 +5,8 @@ from typing import Any
 import numpy
 import torch
 
+from miles.utils.routed_experts import is_boxed_ray_ref
+
 
 @dataclass
 class Sample:
@@ -179,7 +181,7 @@ class Sample:
             assert len(self.rollout_log_probs) == self.response_length, (
                 f"rollout_log_probs length ({len(self.rollout_log_probs)}) != response_length ({self.response_length})"
             )
-        if self.rollout_routed_experts is not None:
+        if self.rollout_routed_experts is not None and not is_boxed_ray_ref(self.rollout_routed_experts):
             actual = len(self.rollout_routed_experts)
             expect = len(self.tokens) - 1
             assert actual == expect, f"rollout_routed_experts length ({actual}) != len(tokens) - 1 ({expect})"
@@ -199,6 +201,8 @@ class Sample:
             self.loss_mask = self.loss_mask[:-n]
         self.response = tokenizer.decode(self.tokens[-self.response_length :]) if self.response_length > 0 else ""
         if self.rollout_routed_experts is not None:
+            if is_boxed_ray_ref(self.rollout_routed_experts):
+                raise ValueError("Cannot strip output tokens while rollout_routed_experts is a boxed Ray ObjectRef")
             self.rollout_routed_experts = self.rollout_routed_experts[:-n]
 
     def reset_for_retry(self) -> None:

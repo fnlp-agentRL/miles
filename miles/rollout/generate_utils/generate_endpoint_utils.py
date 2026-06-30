@@ -5,10 +5,8 @@ Utils to integrate SGLang's `/generate` endpoint with RL things like Sample.
 from copy import deepcopy
 from typing import Any
 
-import numpy as np
-import pybase64
-
 from miles.utils.processing_utils import encode_image_for_rollout_engine
+from miles.utils.routed_experts import decode_routed_experts, is_boxed_ray_ref
 from miles.utils.types import Sample
 
 
@@ -106,5 +104,8 @@ def get_rollout_topk_from_response(args, output, sample, key):
     info = output["meta_info"].get(key)
     if info is None:
         return None
-    x = np.frombuffer(pybase64.b64decode(info.encode("ascii")), dtype=np.int32)
-    return x.reshape(len(sample.tokens) - 1, args.num_layers, args.moe_router_topk)
+    if is_boxed_ray_ref(info):
+        return info
+    if isinstance(info, str):
+        return decode_routed_experts(info, len(sample.tokens) - 1, args.num_layers, args.moe_router_topk)
+    raise TypeError(f"Unsupported {key} payload type: {type(info).__name__}")

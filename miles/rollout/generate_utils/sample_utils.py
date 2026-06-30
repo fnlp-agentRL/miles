@@ -1,6 +1,7 @@
 from copy import deepcopy
 from dataclasses import fields
 
+from miles.utils.routed_experts import is_boxed_ray_ref
 from miles.utils.types import Sample
 
 
@@ -41,7 +42,11 @@ def _merge_sample_pair(a: Sample, b: Sample, tokenizer) -> Sample:
         assert _startswith(short=a.prompt, long=b.prompt), "b.prompt must start with a.prompt"
         assert _startswith(short=a.tokens, long=b.tokens), "b.tokens must start with a.tokens"
         assert obs_len > 0, f"obs_len must be > 0, got {obs_len}"
-        if a.rollout_routed_experts is not None:
+        if (
+            a.rollout_routed_experts is not None
+            and not is_boxed_ray_ref(a.rollout_routed_experts)
+            and not is_boxed_ray_ref(b.rollout_routed_experts)
+        ):
             assert a.rollout_routed_experts.shape[0] <= b.rollout_routed_experts.shape[0]
         assert a.status == Sample.Status.COMPLETED, f"a.status must be COMPLETED, got {a.status}"
 

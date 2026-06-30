@@ -7,6 +7,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from miles.utils.data import get_minimum_num_micro_batch_size
+from miles.utils.routed_experts import resolve_routed_experts
 from miles.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from miles.utils.types import RolloutBatch
 
@@ -90,7 +91,19 @@ def get_rollout_data(args: Namespace, rollout_data_ref: Box) -> RolloutBatch:
             )
         ]
     if "rollout_routed_experts" in rollout_data:
-        rollout_data["rollout_routed_experts"] = [torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]]
+        rollout_data["rollout_routed_experts"] = [
+            torch.from_numpy(
+                resolve_routed_experts(
+                    routed_experts,
+                    len(tokens) - 1,
+                    args.num_layers,
+                    args.moe_router_topk,
+                )
+            )
+            for routed_experts, tokens in zip(
+                rollout_data["rollout_routed_experts"], rollout_data["tokens"], strict=True
+            )
+        ]
     return rollout_data
 
 
