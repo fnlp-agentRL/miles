@@ -22,6 +22,7 @@ from miles.backends.megatron_utils.lora_utils import (
 from miles.ray.ray_actor import RayActor
 from miles.utils.env_report import collect_and_print_node_env_report
 from miles.utils.http_utils import get_host_info
+from miles.utils.logging_utils import actor_log_path, redirect_process_output
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,8 @@ class SGLangEngine(RayActor):
         router_port=None,
         engine_info_bootstrap_port=None,
     ):
+        redirect_process_output(actor_log_path(f"sglang_{self.worker_type}_rank_{self.rank:03d}.log"))
+
         if env_report := self.args.env_report:
             collect_and_print_node_env_report(
                 role="rollout",

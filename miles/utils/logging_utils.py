@@ -29,6 +29,33 @@ def configure_logger(prefix: str = ""):
     configure_strict_async_warnings()
 
 
+def actor_log_path(filename: str) -> str | None:
+    log_dir = os.environ.get("LOG_DIR")
+    if not log_dir:
+        return None
+    return os.path.join(log_dir, "actors", filename)
+
+
+def redirect_process_output(log_path: str | None) -> None:
+    if not log_path:
+        return
+
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        os.dup2(fd, 1)
+        os.dup2(fd, 2)
+    finally:
+        os.close(fd)
+
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(line_buffering=True)
+
+
 def configure_strict_async_warnings() -> None:
     """Turn unawaited-coroutine warnings into fatal errors.
 

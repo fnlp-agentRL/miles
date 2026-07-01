@@ -112,6 +112,9 @@ class ServerGroup:
                 }.items()
             }
             env_vars.update(dumper_utils.get_sglang_env(self.args))
+            for name in ("LOG_DIR", "RUN_DIR"):
+                if value := os.environ.get(name):
+                    env_vars[name] = value
 
             rollout_engine = RolloutRayActor.options(
                 num_cpus=num_cpus,

@@ -16,6 +16,7 @@ from miles.utils import train_dump_utils
 from miles.utils.context_utils import with_defer
 from miles.utils.distributed_utils import get_gloo_group, init_process_group
 from miles.utils.hf_config import load_hf_config
+from miles.utils.logging_utils import actor_log_path, redirect_process_output
 from miles.utils.memory_utils import clear_memory, print_memory
 from miles.utils.processing_utils import load_tokenizer
 from miles.utils.ray_utils import Box
@@ -59,6 +60,7 @@ class MegatronTrainRayActor(TrainRayActor):
         role: str,
         with_ref: bool = False,
     ) -> int | None:
+        redirect_process_output(actor_log_path(f"megatron_{role}_rank_{self._rank:03d}.log"))
         monkey_patch_torch_dist()
 
         super().init(args, role, with_ref)

@@ -57,6 +57,9 @@ class RayTrainGroup:
             **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
             **self.args.train_env_vars,
         }
+        for name in ("LOG_DIR", "RUN_DIR"):
+            if value := os.environ.get(name):
+                env_vars[name] = value
 
         if source_patcher_config := self.args.dumper_source_patcher_config_train:
             env_vars["DUMPER_SOURCE_PATCHER_CONFIG"] = source_patcher_config
