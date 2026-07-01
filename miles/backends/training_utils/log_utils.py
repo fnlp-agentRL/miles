@@ -487,6 +487,17 @@ def log_train_step(
         for key, val in extra_metrics.items():
             log_dict_out[f"train/{role_tag}{key}"] = val
 
+    # LLD: recover the exact conditional mean ppo_kl from each (sum, count) pair -- both rode the
+    # same aggregation scaling so sum/count is exact -- then drop the raw pair. A persistently
+    # positive train/lld_ppo_kl_pos means positive-advantage responses are being pushed down (LLD).
+    for sign in ("pos", "neg"):
+        num = loss_dict.get(f"lld_{sign}_kl_sum")
+        cnt = loss_dict.get(f"lld_{sign}_kl_cnt")
+        if num is not None and cnt is not None and float(cnt) != 0.0:
+            log_dict_out[f"train/{role_tag}lld_ppo_kl_{sign}"] = float(num) / float(cnt)
+        for raw in (f"lld_{sign}_kl_sum", f"lld_{sign}_kl_cnt"):
+            log_dict_out.pop(f"train/{role_tag}{raw}", None)
+
     log_dict_out["train/step"] = accumulated_step_id
 
     if should_log is None:

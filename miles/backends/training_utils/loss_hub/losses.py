@@ -176,6 +176,18 @@ def policy_loss_function(
         torch.nan_to_num(advantages, nan=0.0, posinf=0.0, neginf=0.0),
         advantages.new_zeros(()),
     )
+
+    # LLD monitor (arXiv:2512.04220): ppo_kl = ln pi_old - ln pi_train, so ppo_kl > 0 means the
+    # update LOWERED this token's likelihood. Report (sum, count) of ppo_kl per advantage sign --
+    # the aggregator scales every metric by the same token count, so log_train_step recovers the
+    # exact conditional mean as sum / count. Persistently POSITIVE mean on positive-advantage
+    # tokens == the responses we meant to reinforce are pushed down == LLD. (Healthy: pos < 0 < neg.)
+    # advantages is already zeroed on inactive tokens, so > 0 / < 0 excludes padding by itself.
+    kl = ppo_kl.detach().float()
+    lld_pos, lld_neg = advantages > 0, advantages < 0
+    lld_pos_kl_sum, lld_pos_kl_cnt = kl[lld_pos].sum(), lld_pos.sum().float()
+    lld_neg_kl_sum, lld_neg_kl_cnt = kl[lld_neg].sum(), lld_neg.sum().float()
+
     pg_clipfrac_lower = None
     if args.advantage_estimator == "cispo":
         pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, advantages, args.eps_clip_high, log_probs)
@@ -350,6 +362,12 @@ def policy_loss_function(
         "pg_clipfrac": pg_clipfrac.clone().detach(),
         "ppo_kl": ppo_kl.clone().detach(),
         "ess_ratio": ess_ratio_sum.squeeze(),
+        # LLD: (sum, count) of per-token ppo_kl split by advantage sign; log_train_step turns
+        # each pair into the exact conditional mean train/lld_ppo_kl_{pos,neg}.
+        "lld_pos_kl_sum": lld_pos_kl_sum,
+        "lld_pos_kl_cnt": lld_pos_kl_cnt,
+        "lld_neg_kl_sum": lld_neg_kl_sum,
+        "lld_neg_kl_cnt": lld_neg_kl_cnt,
     }
 
     if pg_clipfrac_lower is not None:
