@@ -93,7 +93,9 @@ def aggregate_forward_results(
     return rollout_data
 
 
-def log_lld_metrics(args: Namespace, rollout_data: RolloutBatch, log_dict: dict[str, float], prefix: str = "lld") -> None:
+def log_lld_metrics(
+    args: Namespace, rollout_data: RolloutBatch, log_dict: dict[str, float], prefix: str = "lld"
+) -> None:
     """Online Lazy-Likelihood-Displacement monitor (arXiv:2512.04220).
 
     Splits this step's responses into preferred (advantage > 0, ~ "correct" in
@@ -112,8 +114,11 @@ def log_lld_metrics(args: Namespace, rollout_data: RolloutBatch, log_dict: dict[
     # class by zeroing the log-probs of the other samples -> their per-sample mean
     # becomes 0 and drops out; we then divide by the kept count.
     sosm = get_sum_of_sample_mean(
-        rollout_data["total_lengths"], rollout_data["response_lengths"], masks,
-        qkv_format=args.qkv_format, max_seq_lens=rollout_data.get("max_seq_lens"),
+        rollout_data["total_lengths"],
+        rollout_data["response_lengths"],
+        masks,
+        qkv_format=args.qkv_format,
+        max_seq_lens=rollout_data.get("max_seq_lens"),
     )
 
     def mean_logp(keep: list[bool]) -> float:
@@ -206,7 +211,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                 raise ValueError(f"Unsupported type: {type(val)} for key: {key}")
             log_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
 
-        log_lld_metrics(args, rollout_data, log_dict)
+        # log_lld_metrics(args, rollout_data, log_dict)
         reduced_log_dict = gather_log_data("rollout", args, rollout_id, log_dict)
         if args.ci_test and not args.ci_disable_logprobs_checker and reduced_log_dict is not None:
             if (
@@ -230,11 +235,15 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                     abs_tol = 1e-8
                 assert isclose(
                     reduced_log_dict["rollout/log_probs"], reduced_log_dict["rollout/ref_log_probs"], abs_tol=abs_tol
-                ), f"CI check failed: log_probs ({reduced_log_dict['rollout/log_probs']}) != ref_log_probs ({reduced_log_dict['rollout/ref_log_probs']})"
+                ), (
+                    f"CI check failed: log_probs ({reduced_log_dict['rollout/log_probs']}) != ref_log_probs ({reduced_log_dict['rollout/ref_log_probs']})"
+                )
             if "rollout/log_probs" in reduced_log_dict and "rollout/rollout_log_probs" in reduced_log_dict:
                 assert isclose(
                     reduced_log_dict["rollout/log_probs"], reduced_log_dict["rollout/rollout_log_probs"], abs_tol=0.03
-                ), f"CI check failed: log_probs ({reduced_log_dict['rollout/log_probs']}) != rollout_log_probs ({reduced_log_dict['rollout/rollout_log_probs']})"
+                ), (
+                    f"CI check failed: log_probs ({reduced_log_dict['rollout/log_probs']}) != rollout_log_probs ({reduced_log_dict['rollout/rollout_log_probs']})"
+                )
             if "rollout/entropy" in reduced_log_dict:
                 assert 0 < reduced_log_dict["rollout/entropy"] < 0.7
 
@@ -277,7 +286,9 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                 total = sum(count) + 1e-9
                 percentile = [c / total for c in count]
 
-                percentile = {f"p{min(math.ceil(q*100),100)}": p for q, p in zip(quantiles, percentile, strict=True)}
+                percentile = {
+                    f"p{min(math.ceil(q * 100), 100)}": p for q, p in zip(quantiles, percentile, strict=True)
+                }
                 return percentile
 
             raw_rewards = rollout_data["raw_reward"]
@@ -380,9 +391,9 @@ def log_perf_data(rollout_id: int, args: Namespace) -> None:
         is_primary_rank=(
             parallel_state.tp.rank == 0 and parallel_state.is_pp_last_stage and parallel_state.intra_dp_cp.rank == 0
         ),
-        compute_total_fwd_flops=lambda seq_lens: calculate_fwd_flops(seqlens=seq_lens, args=args)
-        / dist.get_world_size()
-        / 1e12,
+        compute_total_fwd_flops=lambda seq_lens: (
+            calculate_fwd_flops(seqlens=seq_lens, args=args) / dist.get_world_size() / 1e12
+        ),
     )
 
 
