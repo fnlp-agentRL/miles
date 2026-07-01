@@ -1,6 +1,5 @@
 import asyncio
 import ipaddress
-import json
 import logging
 import multiprocessing
 import os
@@ -9,6 +8,7 @@ import socket
 import time
 
 import httpx
+import msgspec
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +215,8 @@ async def _post(
                 response = await getattr(client, action)(url, json=payload or {}, headers=headers, timeout=timeout)
             response.raise_for_status()
             try:
-                output = response.json()
-            except json.JSONDecodeError:
+                output = msgspec.json.decode(response.content)
+            except msgspec.DecodeError:
                 print(f"JSONDecodeError: {response.text}")
                 output = response.text
         except Exception as e:
