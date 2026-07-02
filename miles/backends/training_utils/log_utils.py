@@ -1,5 +1,6 @@
 import logging
 from argparse import Namespace
+from collections.abc import Callable
 from math import isclose
 
 import numpy as np
@@ -13,11 +14,20 @@ from miles.utils.metric_utils import compute_pass_rate, compute_rollout_step
 from miles.utils.types import RolloutBatch
 
 from ...utils import tracking_utils
-from .cp_utils import get_sum_of_sample_mean
+from .cp_utils import get_local_response_loss_masks, get_sum_of_sample_mean
 from .data import DataIterator
 from .parallel import get_parallel_state
 
 logger = logging.getLogger(__name__)
+
+
+def collapse_sum_count_pairs(log_dict: dict[str, float]) -> None:
+
+    for sum_key in [k for k in log_dict if k.endswith("_sum")]:
+        cnt_key = sum_key[:-4] + "_cnt"
+        if cnt_key in log_dict:
+            total, cnt = log_dict.pop(sum_key), log_dict.pop(cnt_key)
+            log_dict[sum_key[:-4]] = total / cnt if cnt else 0.0
 
 
 def gather_log_data(
@@ -25,6 +35,7 @@ def gather_log_data(
     args: Namespace,
     rollout_id: int,
     log_dict: dict[str, float],
+    post_reduce: Callable[[dict[str, float]], None] | None = None,
 ) -> dict[str, float] | None:
     """
     Gather per-rank metrics, reduce by mean on the DP source rank, and log.
@@ -32,6 +43,9 @@ def gather_log_data(
     Expects `log_dict` to contain plain scalars. The DP source rank prints and
     optionally logs to WandB/TensorBoard with a step derived from `rollout_id` and
     batch sizes. Returns the reduced dict on the DP source rank; returns None on others.
+
+    `post_reduce`, if given, is applied in place to the reduced dict after averaging
+    and before logging (e.g. `collapse_sum_count_pairs` for (sum, count) metrics).
     """
 
     parallel_state = get_parallel_state()
@@ -51,6 +65,8 @@ def gather_log_data(
         reduced_log_dict = {
             f"{metric_name}/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
         }
+        if post_reduce is not None:
+            post_reduce(reduced_log_dict)
         logger.info(f"{metric_name} {rollout_id}: {reduced_log_dict}")
 
         # Calculate step once to avoid duplication
@@ -93,48 +109,39 @@ def aggregate_forward_results(
     return rollout_data
 
 
-def log_lld_metrics(
-    args: Namespace, rollout_data: RolloutBatch, log_dict: dict[str, float], prefix: str = "lld"
-) -> None:
-    """Online Lazy-Likelihood-Displacement monitor (arXiv:2512.04220).
+def log_lld_metrics(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -> None:
 
-    Splits this step's responses into preferred (advantage > 0, ~ "correct" in
-    GRPO) vs dispreferred and logs their CP-correct mean policy log-prob. Watch
-    the TREND across rollout steps: healthy RL -> logp_preferred rises and the
-    gap grows; LLD -> logp_preferred falls/stagnates and the gap shrinks (the
-    death-spiral signature).
-    """
-    if "log_probs" not in rollout_data or "advantages" not in rollout_data:
+    parallel_state = get_parallel_state()
+    if not (parallel_state.tp.rank == 0 and parallel_state.is_pp_last_stage):
         return
-    cp_size = get_parallel_state().cp.size
-    masks = rollout_data["loss_masks"]
-    lps = [t.detach() for t in rollout_data["log_probs"]]
+    # With --use-rollout-logprobs the train-time forward is skipped, so fall back to
+    # the behavior-policy logp from the inference engine.
+    logp_key = "log_probs" if rollout_data.get("log_probs") else "rollout_log_probs"
+    if not rollout_data.get(logp_key) or "advantages" not in rollout_data:
+        return
 
-    # Reuse the same CP-correct reducer the rollout loop uses (built once). Select a
-    # class by zeroing the log-probs of the other samples -> their per-sample mean
-    # becomes 0 and drops out; we then divide by the kept count.
-    sosm = get_sum_of_sample_mean(
+    local_masks = get_local_response_loss_masks(
         rollout_data["total_lengths"],
         rollout_data["response_lengths"],
-        masks,
+        rollout_data["loss_masks"],
         qkv_format=args.qkv_format,
         max_seq_lens=rollout_data.get("max_seq_lens"),
     )
+    logp = torch.cat([t.detach() for t in rollout_data[logp_key]])
+    adv = torch.cat([t.detach() for t in rollout_data["advantages"]])
+    mask = torch.cat(local_masks).to(dtype=torch.bool)
 
-    def mean_logp(keep: list[bool]) -> float:
-        x = torch.cat([lp if k else torch.zeros_like(lp) for lp, k in zip(lps, keep, strict=True)])
-        return (cp_size * sosm(x) / max(sum(keep), 1)).item()
-
-    pref = [(a.detach() * m).sum().item() > 0 for a, m in zip(rollout_data["advantages"], masks, strict=True)]
-    lp_all = mean_logp([True] * len(masks))
-    lp_pref = mean_logp(pref) if any(pref) else lp_all  # fall back to all when a class is empty
-    lp_dis = mean_logp([not p for p in pref]) if not all(pref) else lp_all
-
-    log_dict[f"{prefix}_logp_preferred"] = lp_pref
-    log_dict[f"{prefix}_logp_dispreferred"] = lp_dis
-    log_dict[f"{prefix}_logp_gap"] = lp_pref - lp_dis
-    log_dict[f"{prefix}_conf_preferred"] = float(np.exp(lp_pref))
-    log_dict[f"{prefix}_frac_preferred"] = sum(pref) / len(masks)
+    pos, neg = mask & (adv > 0), mask & (adv < 0)
+    log_dict = {
+        "logp_preferred_sum": logp[pos].sum().item(),
+        "logp_preferred_cnt": float(pos.sum().item()),
+        "logp_dispreferred_sum": logp[neg].sum().item(),
+        "logp_dispreferred_cnt": float(neg.sum().item()),
+        # Class balance rides the same collapse: preferred tokens / all sign-carrying tokens.
+        "frac_preferred_sum": float(pos.sum().item()),
+        "frac_preferred_cnt": float((pos.sum() + neg.sum()).item()),
+    }
+    gather_log_data("rollout", args, rollout_id, log_dict, post_reduce=collapse_sum_count_pairs)
 
 
 def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -> None:
@@ -211,7 +218,6 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                 raise ValueError(f"Unsupported type: {type(val)} for key: {key}")
             log_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
 
-        # log_lld_metrics(args, rollout_data, log_dict)
         reduced_log_dict = gather_log_data("rollout", args, rollout_id, log_dict)
         if args.ci_test and not args.ci_disable_logprobs_checker and reduced_log_dict is not None:
             if (
@@ -254,6 +260,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                 f"({log_dict['rollout_log_probs']})"
             )
 
+    log_lld_metrics(rollout_id, args, rollout_data)
     if args.log_multi_turn:
         log_multi_turn_data(rollout_id, args, rollout_data)
     if args.log_passrate:
