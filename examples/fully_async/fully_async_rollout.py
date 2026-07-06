@@ -320,11 +320,10 @@ class AsyncRolloutWorker:
                         )
                     else:
                         sglang_str = f"unavailable ({sg_err})"
-                    print(
+                    logger.info(
                         f"[fully_async worker] submitted_groups={self.submitted_groups}, "
                         f"completed_groups={self.completed_groups}, active_tasks={len(active_tasks)}, "
-                        f"output_queue={self.get_queue_size()} | sglang: {sglang_str}",
-                        flush=True,
+                        f"output_queue={self.get_queue_size()} | sglang: {sglang_str}"
                     )
 
                 # Brief sleep to avoid busy waiting
