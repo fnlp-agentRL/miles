@@ -188,6 +188,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                         "log_probs",
                         "ref_log_probs",
                         "rollout_log_probs",
+                        "teacher_log_probs",
                         "returns",
                         "advantages",
                         "values",
