@@ -357,10 +357,10 @@ class AsyncRolloutWorker:
             self.worker_thread.join(timeout=5)
         print("Stopped async worker thread")
 
-    def get_completed_groups(self) -> list[tuple]:
+    def get_completed_groups(self, max_groups: int | None = None) -> list[tuple]:
         """Get completed sample groups"""
         completed = []
-        while True:
+        while max_groups is None or len(completed) < max_groups:
             try:
                 result = self.output_queue.get_nowait()
                 completed.append(result)
@@ -417,7 +417,8 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer: DataSource)
 
     while len(data) < target_data_size:
         # Collect completed results
-        completed = worker.get_completed_groups()
+        remaining_slots = target_data_size - len(data) - len(completed_groups)
+        completed = worker.get_completed_groups(max_groups=max(0, remaining_slots))
 
         made_progress = False
         for group_id, group in completed:
@@ -523,11 +524,15 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer: DataSource)
         if not processed_any:
             await asyncio.sleep(0.01)
 
-    # Groups drained into completed_groups but never consumed (target reached
-    # first) had their baseline recorded at submission but never popped by
-    # staleness(); drop them here so _baselines doesn't grow without bound.
-    if use_staleness_filter and completed_groups:
-        _weight_tracker.discard(list(completed_groups.keys()))
+    # This should only happen if future changes leave a local backlog after
+    # target_data_size is reached. Those groups are not returned for training.
+    if completed_groups:
+        logger.warning(
+            f"Dropping {len(completed_groups)} completed groups that were drained but not consumed "
+            f"after reaching target_data_size={target_data_size}"
+        )
+        if use_staleness_filter:
+            _weight_tracker.discard(list(completed_groups.keys()))
 
     duration = time.time() - start_time
     print(f"Rollout completed in {duration:.2f}s! Global worker queue size: {worker.get_queue_size()}")
