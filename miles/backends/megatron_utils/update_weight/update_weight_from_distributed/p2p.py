@@ -265,15 +265,24 @@ class UpdateWeightP2P(DistBucketedWeightUpdateMixin):
         initialize_fp8_gemm_config(server_args)
         initialize_fp4_gemm_config(server_args)
 
-        # Monkey-patch the loader-level post_load_weights to no-op BEFORE get_model,
-        # because get_model() calls post_load_weights() internally (loader.py:1310)
+        # Monkey-patch the loader-level post_load_weights helper to no-op BEFORE get_model,
+        # because get_model() calls it internally for dummy / remote-instance loaders,
         # which may invoke CUDA-only kernels (e.g., per_tensor_quant_fp8 for FP8 models).
         # This is safe because the rollout engine runs post_load_weights on its own GPU
         # after RDMA transfer via post_process_weights(post_load_weights=True).
         from sglang.srt.model_loader import loader as model_loader_module
 
-        original_post_load_weights = model_loader_module.post_load_weights
-        model_loader_module.post_load_weights = lambda *args, **kwargs: None
+        if hasattr(model_loader_module, "_post_load_weights"):
+            post_load_weights_attr = "_post_load_weights"
+        elif hasattr(model_loader_module, "post_load_weights"):
+            post_load_weights_attr = "post_load_weights"
+        else:
+            raise AttributeError(
+                "sglang.srt.model_loader.loader has neither _post_load_weights nor post_load_weights"
+            )
+
+        original_post_load_weights = getattr(model_loader_module, post_load_weights_attr)
+        setattr(model_loader_module, post_load_weights_attr, lambda *args, **kwargs: None)
         try:
             with ParallelismContext(parallelism_config):
                 model = get_model(
@@ -282,7 +291,7 @@ class UpdateWeightP2P(DistBucketedWeightUpdateMixin):
                     device_config=DeviceConfig(device="cpu"),
                 )
         finally:
-            model_loader_module.post_load_weights = original_post_load_weights
+            setattr(model_loader_module, post_load_weights_attr, original_post_load_weights)
 
         # Also patch the instance method for subsequent load_weights() calls
         # (deepseek_weight_loader.py:342 calls self.post_load_weights() at the end).
@@ -291,7 +300,10 @@ class UpdateWeightP2P(DistBucketedWeightUpdateMixin):
 
         if first_engine_rank:
             for param in model.parameters():
-                param.data = param.data.pin_memory()
+                param_data = param.data
+                if param_data.device.type != "cpu":
+                    param_data = param_data.cpu()
+                param.data = param_data.pin_memory()
         else:
             for name, param in model.named_parameters():
                 assert name in self._shared_params_dict, f"[P2P-Shared] Parameter {name} not found in shared buffers"
